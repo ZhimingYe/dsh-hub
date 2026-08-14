@@ -1,0 +1,33 @@
+# Applied by dsh-hub connect.
+- id: webserver
+  disabled: true
+
+- id: directory-picker
+  disabled: true
+
+- id: api-gateway
+  config:
+    nativeOpen: false
+
+- insert:
+  - id: webserver-unix
+    name: '@dsh-hub/webserver-unix'
+    inject: [webStartup]
+    config:
+      socketPath: !!js process.env.DSH_UNIX_SOCKET
+  - id: directory-picker-browse
+    name: '@deepseek-ai/dsh-host-directory-picker-browse'
+  - id: directory-picker-browse-ui
+    name: '@deepseek-ai/dsh-client-ui-directory-picker-browse'
+  - id: hub-logout
+    name: '@dsh-hub/logout'
+  - id: hub-preview
+    name: '@dsh-hub/preview'
+    inject: [webServer]
+
+- id: web-runtime
+  inject: [webStartup]
+  config:
+    printUrl: false
+    surfaceContext: false
+    trustedHosts: []

@@ -1,0 +1,4 @@
+port: 8787
+agentSecret: "改成至少16个字符的随机串"
+users:
+  alice: "改成你的密码"

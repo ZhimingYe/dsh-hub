@@ -1,0 +1,222 @@
+import { createServer } from 'node:http'
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { after, before, test } from 'node:test'
+import assert from 'node:assert/strict'
+import { WebSocket, WebSocketServer } from 'ws'
+import { HubServer } from '../src/server.ts'
+import { HubAgent } from '../src/agent.ts'
+import { loadHubConfig } from '../src/config.ts'
+
+const dir = mkdtempSync(join(tmpdir(), 'dsh-hub-'))
+const socketPath = join(dir, 'dsh.sock')
+const configPath = join(dir, 'hub.yaml')
+
+writeFileSync(configPath, `
+host: 127.0.0.1
+port: 0
+agentSecret: "test-agent-secret-1"
+users:
+  alice: "alice-secret"
+  bob: "bob-secret"
+`)
+
+const dsh = createServer((req, res) => {
+  if (req.url === '/hello') {
+    res.writeHead(200, {
+      'content-type': 'text/plain; charset=utf-8',
+      'x-dsh-host': String(req.headers.host),
+      'x-dsh-cookie': String(req.headers.cookie ?? ''),
+      'x-dsh-origin': String(req.headers.origin ?? ''),
+    })
+    res.end('from-dsh')
+    return
+  }
+  if (req.url === '/echo' && req.method === 'POST') {
+    res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' })
+    req.pipe(res)
+    return
+  }
+  res.writeHead(404)
+  res.end('missing')
+})
+
+const dshWss = new WebSocketServer({ noServer: true })
+dsh.on('upgrade', (req, socket, head) => {
+  if (new URL(req.url ?? '/', 'http://x').pathname !== '/api/events.mux') {
+    socket.destroy()
+    return
+  }
+  dshWss.handleUpgrade(req, socket, head, ws => {
+    ws.on('message', (data, binary) => { ws.send(data, { binary }) })
+  })
+})
+
+const hub = new HubServer({ config: loadHubConfig(configPath) })
+let agent: HubAgent
+let origin = ''
+let cookie = ''
+
+before(async () => {
+  await new Promise<void>((resolve, reject) => {
+    dsh.listen({ path: socketPath }, () => {
+      chmodSync(socketPath, 0o600)
+      resolve()
+    })
+    dsh.once('error', reject)
+  })
+  const port = await hub.listen()
+  origin = `http://127.0.0.1:${String(port)}`
+  agent = new HubAgent({
+    hubUrl: `ws://127.0.0.1:${String(port)}/agent`,
+    username: 'alice',
+    password: 'alice-secret',
+    agentSecret: 'test-agent-secret-1',
+    socketPath,
+  })
+  await agent.start()
+  await waitFor(() => hub.agentOnline('alice'))
+})
+
+after(async () => {
+  await agent.stop()
+  await hub.close()
+  await new Promise<void>(resolve => { dsh.close(() => { resolve() }) })
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('anonymous browser is sent to login, not to DSH', async () => {
+  const response = await fetch(`${origin}/hello`, { redirect: 'manual' })
+  assert.equal(response.status, 302)
+  assert.equal(response.headers.get('location'), '/login')
+})
+
+test('wrong password is rejected', async () => {
+  const response = await fetch(`${origin}/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: 'username=alice&password=nope',
+    redirect: 'manual',
+  })
+  assert.equal(response.status, 401)
+  assert.match(await response.text(), /不正确/)
+})
+
+test('alice can log in and reach DSH through the tunnel', async () => {
+  cookie = await login('alice', 'alice-secret')
+  const response = await fetch(`${origin}/hello`, { headers: { cookie } })
+  assert.equal(response.status, 200)
+  assert.equal(await response.text(), 'from-dsh')
+  assert.equal(response.headers.get('x-dsh-host'), '127.0.0.1')
+  assert.equal(response.headers.get('x-dsh-cookie'), '')
+  assert.equal(response.headers.get('x-dsh-origin'), '')
+})
+
+test('POST bodies stream through the tunnel', async () => {
+  const response = await fetch(`${origin}/echo`, {
+    method: 'POST',
+    headers: { cookie, 'content-type': 'text/plain' },
+    body: 'payload-xyz',
+  })
+  assert.equal(response.status, 200)
+  assert.equal(await response.text(), 'payload-xyz')
+})
+
+test('browser websocket is relayed to DSH', async () => {
+  const session = cookie.length > 0 ? cookie : await login('alice', 'alice-secret')
+  await new Promise<void>((resolve, reject) => {
+    const ws = new WebSocket(`${origin.replace('http', 'ws')}/api/events.mux`, {
+      headers: { cookie: session },
+      perMessageDeflate: false,
+    })
+    const timer = setTimeout(() => { reject(new Error(`reply timeout readyState=${String(ws.readyState)}`)) }, 3000)
+    const ping = (): void => {
+      if (ws.readyState === WebSocket.OPEN) ws.send('ping-mux')
+    }
+    ws.on('open', ping)
+    const interval = setInterval(ping, 50)
+    ws.on('message', (data) => {
+      clearTimeout(timer)
+      clearInterval(interval)
+      try {
+        assert.equal(String(data), 'ping-mux')
+        ws.close()
+        resolve()
+      } catch (error) {
+        reject(error)
+      }
+    })
+    ws.on('error', error => { clearTimeout(timer); clearInterval(interval); reject(error) })
+  })
+})
+
+test('bob is authenticated but has no agent', async () => {
+  const bob = await login('bob', 'bob-secret')
+  const response = await fetch(`${origin}/hello`, { headers: { cookie: bob } })
+  assert.equal(response.status, 503)
+  assert.match(await response.text(), /离线/)
+})
+
+test('logout revokes the session', async () => {
+  const session = await login('alice', 'alice-secret')
+  const loggedOut = await fetch(`${origin}/logout`, {
+    method: 'POST',
+    headers: { cookie: session },
+    redirect: 'manual',
+  })
+  assert.equal(loggedOut.status, 302)
+  assert.equal(loggedOut.headers.get('location'), '/login')
+  const setCookie = loggedOut.headers.get('set-cookie') ?? ''
+  assert.match(setCookie, /dsh_hub_session=/)
+  assert.match(setCookie, /Max-Age=0/)
+  const again = await fetch(`${origin}/hello`, { headers: { cookie: session }, redirect: 'manual' })
+  assert.equal(again.status, 302)
+  assert.equal(again.headers.get('location'), '/login')
+})
+
+test('GET /logout also signs out', async () => {
+  const session = await login('alice', 'alice-secret')
+  const loggedOut = await fetch(`${origin}/logout`, {
+    headers: { cookie: session },
+    redirect: 'manual',
+  })
+  assert.equal(loggedOut.status, 302)
+  assert.equal(loggedOut.headers.get('location'), '/login')
+  const again = await fetch(`${origin}/hello`, { headers: { cookie: session }, redirect: 'manual' })
+  assert.equal(again.status, 302)
+})
+
+test('unauthenticated /api is 401', async () => {
+  const response = await fetch(`${origin}/api/session.list`, { method: 'POST' })
+  assert.equal(response.status, 401)
+})
+
+test('DSH is not listening on TCP', async () => {
+  const address = dsh.address()
+  assert.equal(typeof address, 'string')
+  assert.equal(address, socketPath)
+})
+
+async function login(username: string, password: string): Promise<string> {
+  const response = await fetch(`${origin}/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: `username=${username}&password=${password}`,
+    redirect: 'manual',
+  })
+  assert.equal(response.status, 302)
+  const setCookie = response.headers.get('set-cookie')
+  assert.ok(setCookie)
+  const match = /dsh_hub_session=([^;]+)/.exec(setCookie)
+  assert.ok(match)
+  return `dsh_hub_session=${match[1]}`
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
+  const start = Date.now()
+  while (!predicate()) {
+    if (Date.now() - start > timeoutMs) throw new Error('timeout waiting for agent')
+    await new Promise(resolve => { setTimeout(resolve, 50) })
+  }
+}

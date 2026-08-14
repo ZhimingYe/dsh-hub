@@ -1,0 +1,15 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+hub.yaml
+hub.local.yaml
+*.password
+.dsh-hub-password
+.env
+.env.*
+
+npm-debug.log*
+.npm/
+
+.DS_Store

@@ -1,0 +1,38 @@
+{
+  "name": "dsh-hub",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Public Hub + HPC Agent for DeepSeek Harness. Does not modify upstream dsh packages.",
+  "bin": {
+    "dsh-hub": "./bin/dsh-hub.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "logout",
+    "preview",
+    "webserver-unix",
+    "workstation.cordis.yml"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "serve": "node --import tsx/esm src/cli.ts serve",
+    "connect": "node --import tsx/esm src/cli.ts connect",
+    "test": "node --import tsx/esm --test --test-concurrency=1 --test-timeout=15000 test/*.test.ts"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "dependencies": {
+    "https-proxy-agent": "^7.0.6",
+    "tsx": "^4.19.4",
+    "ws": "^8.18.3",
+    "yaml": "^2.8.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.8.3"
+  }
+}
