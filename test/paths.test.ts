@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { writeFileSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, writeFileSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { agentUrlFromHub, requireSecureHubUrl } from '../src/paths.ts'
 import { assertBindPolicy, loadHubConfig } from '../src/config.ts'
 import { composeDshArgv, isDshOneShot, parseConnectArgs } from '../src/connect-args.ts'
 import { FailureLimiter, clientKey, isForwardedHttps } from '../src/auth.ts'
+import { assertHubPluginsResolvable, ensureHubPluginLinks, hubPluginLinkRoots, hubPlugins } from '../src/setup-workstation.ts'
 
 test('portal address becomes the agent websocket url', () => {
   assert.equal(agentUrlFromHub('http://10.0.0.8:8787'), 'ws://10.0.0.8:8787/agent')
@@ -169,4 +170,30 @@ test('rate-limit key ignores X-Forwarded-For unless the peer is a trusted proxy'
 
   const mapped = fakeReq('::ffff:127.0.0.1', { 'x-forwarded-for': '203.0.113.10' })
   assert.equal(clientKey(mapped, ['127.0.0.1']), '203.0.113.10')
+})
+
+test('hub plugins link into the dsh install and the workstation profile', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-hub-link-'))
+  const home = join(root, 'home')
+  const profileDir = join(home, 'profiles', 'workstation')
+  const dshRoot = join(root, 'prefix', 'node_modules', '@deepseek-ai', 'dsh')
+  mkdirSync(dshRoot, { recursive: true })
+  const roots = hubPluginLinkRoots(home, profileDir, dshRoot)
+  assert.deepEqual(roots, [
+    join(profileDir, 'node_modules'),
+    join(home, 'profiles', 'node_modules'),
+    join(dshRoot, 'node_modules'),
+    join(root, 'prefix', 'node_modules'),
+  ])
+  ensureHubPluginLinks(home, profileDir, dshRoot)
+  const preview = hubPlugins().find(plugin => plugin.name === '@dsh-hub/preview')
+  assert.ok(preview)
+  const expected = realpathSync(preview.dir)
+  for (const rootDir of roots) {
+    assert.equal(realpathSync(join(rootDir, '@dsh-hub', 'preview')), expected)
+  }
+  writeFileSync(join(profileDir, 'package.json'), '{}\n')
+  writeFileSync(join(dshRoot, 'package.json'), '{}\n')
+  assertHubPluginsResolvable(profileDir, dshRoot)
+  rmSync(root, { recursive: true, force: true })
 })

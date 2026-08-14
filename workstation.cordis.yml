@@ -1,4 +1,7 @@
-# Applied by dsh-hub connect.
+# Applied by dsh-hub connect. Plugin `name` values stay @dsh-hub/* package names
+# so client-modules serves /plugins/@dsh-hub/<pkg>/client.js. connect symlinks
+# those packages into the dsh install; a --patch overlay does not change dsh's
+# module resolution parent.
 - id: webserver
   disabled: true
 

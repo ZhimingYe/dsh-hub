@@ -227,6 +227,7 @@ npm test
 | 不知道 `hub.yaml` 在哪 | 只在 Hub 主机。默认 `$PWD/hub.yaml`。看 `serve` 打印的 `config:` |
 | 只有本机能打开登录页 | 公网应走 TLS 反代；不要把 `host` 写成 `0.0.0.0` 除非同时设了 `allowPlainHttp` |
 | `找不到 dsh` | 把 `dsh` 加入 `PATH`，或在仓库根目录 `pnpm install && pnpm run build` |
+| `Cannot find package '@dsh-hub/preview'`（或 logout / webserver-unix） | 全局 `dsh` 从自身安装目录解析裸包名，不会看 Hub 仓库。升级本仓库后再执行一次 `dsh-hub connect`；connect 会把这三个包链进 dsh 的 `node_modules`。若 dsh 装在只读目录，把该安装改为用户可写后再 connect |
 | `工作站启动超时` | dsh 没起来，看同一终端的 stderr |
 | 登录后一直离线 | `connect` 没在跑、用户名和 `hub.yaml` 不一致、HPC 访问不到 Hub，或 `agentSecret` 与 connect 侧不一致 |
 | 密码文件报错 | 权限必须是 `0600`，不能被其他人读 |
