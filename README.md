@@ -2,13 +2,17 @@
 
 English | [中文](README.zh.md)
 
-Use DeepSeek Harness in a browser from an HPC node. Hub runs on a public machine; HPC only makes outbound connections and does not open inbound ports.
+Use DeepSeek Harness in a browser from a Unix-like machine (Linux or macOS). Hub runs on a public machine; the Unix-like machine only makes outbound connections and does not open inbound ports.
 
 ```text
-browser  ──HTTPS──▶  Hub (public, TLS reverse proxy)  ◀──WSS (outbound)──  Agent + dsh (HPC)
+browser  ──HTTPS──▶  Hub (public, TLS reverse proxy)  ◀──WSS (outbound)──  Agent + dsh (Unix-like)
 ```
 
-Both machines need Node.js >= 22.19 and this repository. HPC must also be able to run `dsh`.
+![Hub login page with Username, Password, and English | 中文](docs/dsh_hub_screenshot01.jpg)
+
+![Web workstation after sign-in: workspaces, chat, and sign-out](docs/dsh_hub_screenshot02.jpg)
+
+Both machines need Node.js >= 22.19 and this repository. The Unix-like machine must also be able to run `dsh`.
 
 ```sh
 node -v
@@ -36,7 +40,7 @@ dsh-hub --help
 After later upgrades, run `npm install -g .` again.
 Without a global install, use `npx dsh-hub` from the repository root.
 
-On HPC, confirm `dsh` works:
+On the Unix-like machine, confirm `dsh` works:
 
 ```sh
 dsh --help
@@ -62,13 +66,13 @@ listen: http://127.0.0.1:8787
 connect: dsh-hub connect http://<host>:8787 --user alice
 ```
 
-Copy the `DSH_HUB_AGENT_SECRET=` line to HPC immediately (environment variable, `--agent-secret-file`, or a later prompt). Later `serve` runs do not print the plaintext. The yaml cannot recover that value.
+Copy the `DSH_HUB_AGENT_SECRET=` line to the Unix-like machine immediately (environment variable, `--agent-secret-file`, or a later prompt). Later `serve` runs do not print the plaintext. The yaml cannot recover that value.
 
 Allow 443 on the reverse proxy. Open `https://<hub-host>` in a browser; you should see the login page (English by default, with an English | 中文 switch).
 
 Cleartext HTTP on a non-loopback address is refused by default. Set `allowPlainHttp: true` and `host: 0.0.0.0` only for a short lab trial.
 
-`hub.yaml` is for Hub only. HPC `connect` does not read it. The default path is `$PWD/hub.yaml`; every `serve` prints the absolute `config:` path. To choose a file:
+`hub.yaml` is for Hub only. `connect` on the Unix-like machine does not read it. The default path is `$PWD/hub.yaml`; every `serve` prints the absolute `config:` path. To choose a file:
 
 ```sh
 dsh-hub serve --config /etc/dsh-hub/hub.yaml
@@ -88,7 +92,7 @@ users:
 |---|---|---|
 | `port` | `8787` | Listen port |
 | `host` | `127.0.0.1` | Listen address; use a reverse proxy on the public side, do not bind Hub to `0.0.0.0` |
-| `agentSecret` | required | bcrypt hash of the `/agent` Bearer secret; HPC `connect` presents the matching plaintext |
+| `agentSecret` | required | bcrypt hash of the `/agent` Bearer secret; `connect` on the Unix-like machine presents the matching plaintext |
 | `allowPlainHttp` | `false` | Non-loopback cleartext HTTP is allowed only when `true` |
 | `trustedProxies` | `[]` | Reverse-proxy IPs allowed to supply `X-Forwarded-For` / `X-Forwarded-Proto`; an empty list ignores those headers |
 | `users` | required | Login usernames to bcrypt hashes |
@@ -100,9 +104,9 @@ dsh-hub hash
 dsh-hub hash --password-file ~/.dsh-hub-password
 ```
 
-Paste the printed hash into `users:`. To rotate the agent secret, `hash` again, replace `agentSecret`, and update the plaintext on HPC. `hash` reads plaintext only from a prompt or `--password-file`, not from `DSH_HUB_PASSWORD`.
+Paste the printed hash into `users:`. To rotate the agent secret, `hash` again, replace `agentSecret`, and update the plaintext on the Unix-like machine. `hash` reads plaintext only from a prompt or `--password-file`, not from `DSH_HUB_PASSWORD`.
 
-## 3. Connect from HPC
+## 3. Connect from a Unix-like machine
 
 On the machine that runs dsh, as the same uid:
 
@@ -135,7 +139,7 @@ dsh-hub connect https://hub.example.com --user alice
 
 The command line does not accept `--password` or `--agent-secret`.
 
-When HPC needs an HTTP proxy to reach Hub:
+When the Unix-like machine needs an HTTP proxy to reach Hub:
 
 ```sh
 export HTTPS_PROXY=http://proxy:port
@@ -234,7 +238,7 @@ Install packages with `dsh plugin` and open the tunnel with `dsh-hub connect`. D
 | What to update | How |
 |---|---|
 | Hub (login, tunnel, preview, sign-out) | Update dsh-hub, `npm install -g .`, then `connect` |
-| Models, tools, the Web workstation itself | Upgrade `dsh` on HPC |
+| Models, tools, the Web workstation itself | Upgrade `dsh` on the Unix-like machine |
 | Bundles already in workstation | `dsh plugin --profile workstation add <package>` or pnpm `update` |
 
 ## 4. Use in the browser
@@ -304,7 +308,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now dsh-hub
 ```
 
-HPC `connect` also needs to stay running (a job on the compute node, tmux, or a systemd user service). `connect` and dsh must be on the same node and uid.
+`connect` on the Unix-like machine also needs to stay running (tmux, a systemd user service, or a cluster job). `connect` and dsh must be on the same machine and uid.
 
 ## Commands
 
@@ -312,7 +316,7 @@ HPC `connect` also needs to stay running (a job on the compute node, tmux, or a 
 |---|---|
 | Hub | `dsh-hub serve` |
 | Hub | `dsh-hub hash` (bcrypt hash for hub.yaml) |
-| HPC | `dsh-hub connect <url>` |
+| Unix-like machine | `dsh-hub connect <url>` |
 
 ```sh
 dsh-hub --help
@@ -332,8 +336,8 @@ npm test
 | `dsh plugin` cannot find pnpm | Put `pnpm` on PATH, then install the bundle |
 | Workstation start timed out | dsh did not come up; see stderr on the same terminal |
 | Loading `hub.yaml` complains about bcrypt | The field must be a hash from `dsh-hub hash` or first `serve`, not plaintext |
-| Signed in but always offline | `connect` is not running, the username does not match `hub.yaml`, HPC cannot reach Hub, or the agent secret is not the `DSH_HUB_AGENT_SECRET` from first `serve` |
-| Lost `DSH_HUB_AGENT_SECRET` | The yaml cannot recover the plaintext. `dsh-hub hash` a new `agentSecret` and update HPC |
+| Signed in but always offline | `connect` is not running, the username does not match `hub.yaml`, the Unix-like machine cannot reach Hub, or the agent secret is not the `DSH_HUB_AGENT_SECRET` from first `serve` |
+| Lost `DSH_HUB_AGENT_SECRET` | The yaml cannot recover the plaintext. `dsh-hub hash` a new `agentSecret` and update the Unix-like machine |
 | Password file error | Mode must be `0600`; others must not be able to read it |
 | Artifact preview keeps loading | Force-refresh the browser and try again |
 | Preview 403 `path not allowed` | The file must be under the current working directory or a registered workspace; a symlink must not point outside those roots |

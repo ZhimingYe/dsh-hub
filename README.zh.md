@@ -2,13 +2,17 @@
 
 [English](README.md) | 中文
 
-在浏览器里使用 HPC 上的 DeepSeek Harness。公网机器跑 Hub；HPC 只出站连接，不开放入站端口。
+在浏览器里使用类 Unix 机器（Linux 或 macOS）上的 DeepSeek Harness。公网机器跑 Hub；类 Unix 机器只出站连接，不开放入站端口。
 
 ```text
-browser  ──HTTPS──▶  Hub (public, TLS reverse proxy)  ◀──WSS (outbound)──  Agent + dsh (HPC)
+browser  ──HTTPS──▶  Hub (public, TLS reverse proxy)  ◀──WSS (outbound)──  Agent + dsh (Unix-like)
 ```
 
-两台机器都需要 Node.js >= 22.19，以及本仓库。HPC 上还要能运行 `dsh`。
+![Hub 登录页：Username、Password，以及 English | 中文](docs/dsh_hub_screenshot01.jpg)
+
+![登录后的 Web 工作站：工作区、对话、退出登录](docs/dsh_hub_screenshot02.jpg)
+
+两台机器都需要 Node.js >= 22.19，以及本仓库。类 Unix 机器上还要能运行 `dsh`。
 
 ```sh
 node -v
@@ -36,7 +40,7 @@ dsh-hub --help
 以后升级代码再执行一次 `npm install -g .`。
 不装到系统时，在仓库根目录用 `npx dsh-hub`。
 
-HPC 上确认 `dsh` 可用：
+在类 Unix 机器上确认 `dsh` 可用：
 
 ```sh
 dsh --help
@@ -62,13 +66,13 @@ listen: http://127.0.0.1:8787
 connect: dsh-hub connect http://<host>:8787 --user alice
 ```
 
-立刻把 `DSH_HUB_AGENT_SECRET=` 这一行抄到 HPC（环境变量、`--agent-secret-file`，或之后在提示符输入）。以后再执行 `serve` 不会再打印明文。yaml 里还原不出这个值。
+立刻把 `DSH_HUB_AGENT_SECRET=` 这一行抄到类 Unix 机器（环境变量、`--agent-secret-file`，或之后在提示符输入）。以后再执行 `serve` 不会再打印明文。yaml 里还原不出这个值。
 
 放行反代的 443。浏览器打开 `https://<hub-host>`，应看到登录页（默认英文，可用 English | 中文 切换）。
 
 非回环地址上的明文 HTTP 默认拒绝。实验室短时试用才设置 `allowPlainHttp: true` 并 `host: 0.0.0.0`。
 
-`hub.yaml` 只给 Hub 用。HPC 上的 `connect` 不读它。默认路径是 `$PWD/hub.yaml`；`serve` 每次都会打印 `config:` 绝对路径。指定文件：
+`hub.yaml` 只给 Hub 用。类 Unix 机器上的 `connect` 不读它。默认路径是 `$PWD/hub.yaml`；`serve` 每次都会打印 `config:` 绝对路径。指定文件：
 
 ```sh
 dsh-hub serve --config /etc/dsh-hub/hub.yaml
@@ -88,7 +92,7 @@ users:
 |---|---|---|
 | `port` | `8787` | 监听端口 |
 | `host` | `127.0.0.1` | 监听地址；公网用反代，不要把 Hub 直接绑到 `0.0.0.0` |
-| `agentSecret` | 必填 | `/agent` Bearer 密钥的 bcrypt 哈希；HPC 的 `connect` 出示对应明文 |
+| `agentSecret` | 必填 | `/agent` Bearer 密钥的 bcrypt 哈希；类 Unix 机器上的 `connect` 出示对应明文 |
 | `allowPlainHttp` | `false` | 为 `true` 时才允许非回环明文 HTTP |
 | `trustedProxies` | `[]` | 允许提供 `X-Forwarded-For` / `X-Forwarded-Proto` 的反代 IP；空列表表示忽略这些头 |
 | `users` | 必填 | 登录用户名到 bcrypt 哈希 |
@@ -100,9 +104,9 @@ dsh-hub hash
 dsh-hub hash --password-file ~/.dsh-hub-password
 ```
 
-把打印的哈希贴进 `users:`。轮换 Agent 密钥同样 `hash` 后改 `agentSecret`，并更新 HPC 上的明文。`hash` 只从提示符或 `--password-file` 读明文，不读 `DSH_HUB_PASSWORD`。
+把打印的哈希贴进 `users:`。轮换 Agent 密钥同样 `hash` 后改 `agentSecret`，并更新类 Unix 机器上的明文。`hash` 只从提示符或 `--password-file` 读明文，不读 `DSH_HUB_PASSWORD`。
 
-## 3. 从 HPC 连接
+## 3. 从类 Unix 机器连接
 
 在跑 dsh 的那台机器、同一个 uid 下：
 
@@ -135,7 +139,7 @@ dsh-hub connect https://hub.example.com --user alice
 
 命令行不接受 `--password` 或 `--agent-secret`。
 
-HPC 需要走 HTTP 代理才能访问 Hub 时：
+类 Unix 机器需要走 HTTP 代理才能访问 Hub 时：
 
 ```sh
 export HTTPS_PROXY=http://proxy:port
@@ -234,7 +238,7 @@ dsh-hub connect https://hub.example.com --user alice --patch /absolute/path/extr
 | 要更新的 | 做法 |
 |---|---|
 | Hub（登录页、隧道、预览、退出登录） | 更新 dsh-hub 后 `npm install -g .`，再执行 `connect` |
-| 模型、工具、Web 工作站本身 | 升级 HPC 上的 `dsh` |
+| 模型、工具、Web 工作站本身 | 升级类 Unix 机器上的 `dsh` |
 | 已装进 workstation 的组合包 | `dsh plugin --profile workstation add <package>` 或 pnpm 的 `update` |
 
 ## 4. 浏览器里怎么用
@@ -304,7 +308,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now dsh-hub
 ```
 
-HPC 上的 `connect` 同样需要长期运行（计算节点上的 job、tmux 或 systemd user 服务）。`connect` 与 dsh 必须在同一节点、同一 uid。
+类 Unix 机器上的 `connect` 同样需要长期运行（tmux、systemd user 服务，或集群上的 job）。`connect` 与 dsh 必须在同一台机器、同一 uid。
 
 ## 命令
 
@@ -312,7 +316,7 @@ HPC 上的 `connect` 同样需要长期运行（计算节点上的 job、tmux �
 |---|---|
 | Hub | `dsh-hub serve` |
 | Hub | `dsh-hub hash`（为 hub.yaml 生成 bcrypt 哈希） |
-| HPC | `dsh-hub connect <url>` |
+| 类 Unix 机器 | `dsh-hub connect <url>` |
 
 ```sh
 dsh-hub --help
@@ -332,8 +336,8 @@ npm test
 | `dsh plugin` 提示找不到 pnpm | 把 `pnpm` 加入 PATH 后再装组合包 |
 | `工作站启动超时` | dsh 没起来，看同一终端的 stderr |
 | 加载 `hub.yaml` 报 bcrypt | 字段必须是 `dsh-hub hash` 或首次 `serve` 写出的哈希，不能写明文 |
-| 登录后一直离线 | `connect` 没在跑、用户名和 `hub.yaml` 不一致、HPC 访问不到 Hub，或 Agent 密钥与首次 `serve` 打印的 `DSH_HUB_AGENT_SECRET` 不一致 |
-| 丢了 `DSH_HUB_AGENT_SECRET` | yaml 里还原不出明文。`dsh-hub hash` 写一个新 `agentSecret`，并更新 HPC |
+| 登录后一直离线 | `connect` 没在跑、用户名和 `hub.yaml` 不一致、类 Unix 机器访问不到 Hub，或 Agent 密钥与首次 `serve` 打印的 `DSH_HUB_AGENT_SECRET` 不一致 |
+| 丢了 `DSH_HUB_AGENT_SECRET` | yaml 里还原不出明文。`dsh-hub hash` 写一个新 `agentSecret`，并更新类 Unix 机器 |
 | 密码文件报错 | 权限必须是 `0600`，不能被其他人读 |
 | 点产物一直加载 | 强制刷新浏览器后再试 |
 | 预览 403 `path not allowed` | 文件必须在当前工作目录或已登记工作区里；符号链接不能指到这些根之外 |
