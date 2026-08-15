@@ -40,6 +40,7 @@ import {
 } from './auth.js'
 import { headersForBrowser, incomingToPairs } from './headers.js'
 import { FAVICON_SVG, loginPage, offlinePage } from './pages.js'
+import { hubLangFromRequest, langCookie, safeNextPath } from './locale.js'
 
 interface HttpStream {
   kind: 'http'
@@ -145,8 +146,23 @@ export class HubServer {
         res.end(FAVICON_SVG)
         return
       }
+      if (req.method === 'GET' && url.pathname === '/lang') {
+        const set = url.searchParams.get('set')
+        if (set !== 'en' && set !== 'zh') {
+          res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' })
+          res.end('invalid lang')
+          return
+        }
+        const next = safeNextPath(url.searchParams.get('next'))
+        res.writeHead(302, {
+          location: next,
+          'set-cookie': langCookie(set, isForwardedHttps(req, this.config.trustedProxies)),
+        })
+        res.end()
+        return
+      }
       if (req.method === 'GET' && url.pathname === '/login') {
-        this.html(res, 200, loginPage())
+        this.html(res, 200, loginPage(hubLangFromRequest(req)))
         return
       }
       if (req.method === 'POST' && url.pathname === '/login') {
@@ -186,7 +202,7 @@ export class HubServer {
         return
       }
       if (!this.agentOnline(username)) {
-        this.html(res, 503, offlinePage(username))
+        this.html(res, 503, offlinePage(hubLangFromRequest(req), username))
         return
       }
       await this.tunnelHttp(username, req, res)
@@ -208,13 +224,13 @@ export class HubServer {
     const password = params.get('password') ?? ''
     const key = clientKey(req, this.config.trustedProxies)
     if (this.loginFailures.limited(key)) {
-      this.html(res, 429, loginPage('登录次数过多'))
+      this.html(res, 429, loginPage(hubLangFromRequest(req), 'tooMany'))
       return
     }
     const user = findUser(this.config, username)
     if (!this.passwordMatches(user, password)) {
       this.loginFailures.add(key)
-      this.html(res, 401, loginPage('用户名或密码不正确'))
+      this.html(res, 401, loginPage(hubLangFromRequest(req), 'badCredentials'))
       return
     }
     const id = this.sessions.create(user.username)
@@ -422,7 +438,7 @@ export class HubServer {
   private async tunnelHttp(username: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
     const link = this.agentsByUser.get(username)
     if (link === undefined) {
-      this.html(res, 503, offlinePage(username))
+      this.html(res, 503, offlinePage(hubLangFromRequest(req), username))
       return
     }
     const streamId = link.nextStreamId++

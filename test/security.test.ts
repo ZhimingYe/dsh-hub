@@ -76,6 +76,36 @@ test('login with an unknown username is 401', async () => {
     redirect: 'manual',
   })
   assert.equal(response.status, 401)
+  const body = await response.text()
+  assert.match(body, /Incorrect username or password/)
+  assert.match(body, /<html lang="en">/)
+})
+
+test('login page is English by default and switches to Chinese via cookie', async () => {
+  const english = await fetch(`${origin}/login`)
+  assert.equal(english.status, 200)
+  const englishHtml = await english.text()
+  assert.match(englishHtml, /<html lang="en">/)
+  assert.match(englishHtml, /<h1>Sign in<\/h1>/)
+  assert.match(englishHtml, /href="\/lang\?set=zh&amp;next=%2Flogin"/)
+
+  const switched = await fetch(`${origin}/lang?set=zh&next=/login`, { redirect: 'manual' })
+  assert.equal(switched.status, 302)
+  assert.equal(switched.headers.get('location'), '/login')
+  const setCookie = switched.headers.get('set-cookie') ?? ''
+  assert.match(setCookie, /dsh_hub_lang=zh/)
+
+  const chinese = await fetch(`${origin}/login`, { headers: { cookie: 'dsh_hub_lang=zh' } })
+  const chineseHtml = await chinese.text()
+  assert.match(chineseHtml, /<html lang="zh-CN">/)
+  assert.match(chineseHtml, /<h1>登录<\/h1>/)
+
+  const blocked = await fetch(`${origin}/lang?set=zh&next=https://evil.example`, { redirect: 'manual' })
+  assert.equal(blocked.status, 302)
+  assert.equal(blocked.headers.get('location'), '/login')
+
+  const invalid = await fetch(`${origin}/lang?set=fr`)
+  assert.equal(invalid.status, 400)
 })
 
 test('login ignores spoofed X-Forwarded-Proto when trustedProxies is empty', async () => {

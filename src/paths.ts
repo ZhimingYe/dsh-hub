@@ -23,7 +23,7 @@ export function requireSecureHubUrl(input: string, allowPlainHttp: boolean): voi
   const url = new URL(input.includes('://') ? input : `http://${input}`)
   const secure = url.protocol === 'https:' || url.protocol === 'wss:'
   if (secure || isLoopbackHostname(url.hostname) || allowPlainHttp) return
-  throw new Error(`明文 ${url.protocol}// 不能指向非回环地址；改用 https:// 或加 --allow-plain-http`)
+  throw new Error(`cleartext ${url.protocol}// cannot target a non-loopback address; use https:// or --allow-plain-http`)
 }
 
 export function agentUrlFromHub(input: string): string {
@@ -31,7 +31,7 @@ export function agentUrlFromHub(input: string): string {
   if (url.protocol === 'http:') url.protocol = 'ws:'
   else if (url.protocol === 'https:') url.protocol = 'wss:'
   else if (url.protocol !== 'ws:' && url.protocol !== 'wss:') {
-    throw new Error(`不支持的地址: ${input}`)
+    throw new Error(`unsupported address: ${input}`)
   }
   url.pathname = '/agent'
   url.search = ''

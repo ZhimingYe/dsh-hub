@@ -53,7 +53,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     await hashCommand(argv.slice(1))
     return
   }
-  throw new Error(`未知命令 ${command}\n\n${HELP}`)
+  throw new Error(`unknown command ${command}\n\n${HELP}`)
 }
 
 async function serve(argv: string[]): Promise<void> {
@@ -71,7 +71,7 @@ async function serve(argv: string[]): Promise<void> {
   const configPath = resolve(values.config ?? 'hub.yaml')
   if (!existsSync(configPath)) {
     const port = values.port !== undefined ? Number(values.port) : 8787
-    const username = values.user ?? await ask('用户名')
+    const username = values.user ?? await ask('Username')
     const password = await resolvePassword(values['password-file'])
     if (username.length === 0 || password.length === 0) throw new Error('username and password required')
     const agentSecret = randomBytes(32).toString('base64url')
@@ -125,7 +125,7 @@ async function connect(argv: string[]): Promise<void> {
     process.exit(code)
   }
 
-  const username = invocation.username ?? await ask('用户名')
+  const username = invocation.username ?? await ask('Username')
   const password = await resolvePassword(invocation.passwordFile)
   const agentSecret = await resolveAgentSecret(invocation.agentSecretFile)
   if (username.length === 0 || password.length === 0) throw new Error('username and password required')

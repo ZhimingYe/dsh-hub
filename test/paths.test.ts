@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { agentUrlFromHub, requireSecureHubUrl } from '../src/paths.ts'
 import { headersForBrowser } from '../src/headers.ts'
 import { ensurePrivateDirectory } from '../webserver-unix/src/private-dir.js'
+import { parseHubLang, safeNextPath } from '../src/locale.ts'
 import { assertBindPolicy, loadHubConfig, renderHubConfig, writeNewHubConfig } from '../src/config.ts'
 import { isBcryptHash, verifySecret } from '../src/hash.ts'
 import { hashedHubYaml, TEST_AGENT_SECRET } from './hashed-yaml.ts'
@@ -124,7 +125,7 @@ test('connect rejects --agent-secret on argv', () => {
 })
 
 test('plain http to a non-loopback hub url is refused unless opted in', () => {
-  assert.throws(() => requireSecureHubUrl('http://10.0.0.8:8787', false), /明文/)
+  assert.throws(() => requireSecureHubUrl('http://10.0.0.8:8787', false), /cleartext/)
   requireSecureHubUrl('http://127.0.0.1:8787', false)
   requireSecureHubUrl('https://hub.example.com', false)
   requireSecureHubUrl('http://10.0.0.8:8787', true)
@@ -239,6 +240,19 @@ test('hub plugins link into the dsh install and the workstation profile', () => 
   rmSync(root, { recursive: true, force: true })
 })
 
+test('hub lang cookie is English unless exactly zh, and next stays on this origin', () => {
+  assert.equal(parseHubLang(undefined), 'en')
+  assert.equal(parseHubLang('en'), 'en')
+  assert.equal(parseHubLang('zh'), 'zh')
+  assert.equal(parseHubLang('fr'), 'en')
+  assert.equal(safeNextPath(null), '/login')
+  assert.equal(safeNextPath('/'), '/')
+  assert.equal(safeNextPath('/login'), '/login')
+  assert.equal(safeNextPath('https://evil.example'), '/login')
+  assert.equal(safeNextPath('//evil.example'), '/login')
+  assert.equal(safeNextPath('/\\evil'), '/login')
+})
+
 test('headersForBrowser drops Set-Cookie', () => {
   const out = headersForBrowser([
     { name: 'content-type', value: 'text/plain' },
@@ -267,7 +281,7 @@ test('ensurePrivateDirectory refuses a symlink or a file', () => {
   const target = mkdtempSync(join(tmpdir(), 'dsh-hub-sockdir-target-'))
   const link = join(root, 'link')
   symlinkSync(target, link)
-  assert.throws(() => { ensurePrivateDirectory(link) }, /符号链接/)
+  assert.throws(() => { ensurePrivateDirectory(link) }, /symlink/)
 
   const file = join(root, 'file')
   writeFileSync(file, 'x')

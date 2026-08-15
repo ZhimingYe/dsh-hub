@@ -1,4 +1,4 @@
-# 首次 `dsh-hub serve` 会写入 bcrypt 哈希。加用户用 `dsh-hub hash`。
+# First `dsh-hub serve` writes bcrypt hashes. Add users with `dsh-hub hash`.
 port: 8787
 agentSecret: "$2a$12$....................................................."
 users:

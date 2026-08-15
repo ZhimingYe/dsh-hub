@@ -1,3 +1,5 @@
+import { COPY, type HubLang, type LoginError } from './locale.js'
+
 function escapeHtml(value: string): string {
   return value
     .replaceAll('&', '&amp;')
@@ -135,11 +137,35 @@ const STYLES = `
   .row { display: flex; gap: 8px; align-items: center; }
   .row form { margin: 0; }
   .row button { width: auto; margin: 0; }
+  .lang {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    margin: 0 0 16px;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 20px;
+  }
+  .lang a { color: var(--muted); text-decoration: none; }
+  .lang a:hover { color: var(--text); }
+  .lang [aria-current="true"] { color: var(--text); font-weight: 500; }
 `
 
-function shell(title: string, body: string): string {
+function langSwitcher(lang: HubLang, next: string): string {
+  const nextQ = encodeURIComponent(next)
+  const en = lang === 'en'
+    ? '<span aria-current="true">English</span>'
+    : `<a href="/lang?set=en&amp;next=${nextQ}">English</a>`
+  const zh = lang === 'zh'
+    ? '<span aria-current="true">中文</span>'
+    : `<a href="/lang?set=zh&amp;next=${nextQ}">中文</a>`
+  return `<nav class="lang" aria-label="Language">${en}<span>|</span>${zh}</nav>`
+}
+
+function shell(lang: HubLang, title: string, body: string): string {
+  const htmlLang = lang === 'zh' ? 'zh-CN' : 'en'
   return `<!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="${htmlLang}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -153,33 +179,38 @@ function shell(title: string, body: string): string {
 </html>`
 }
 
-export function logoutForm(): string {
-  return `<form method="post" action="/logout"><button type="submit">退出</button></form>`
+export function logoutForm(label: string): string {
+  return `<form method="post" action="/logout"><button type="submit">${escapeHtml(label)}</button></form>`
 }
 
-export function loginPage(error?: string): string {
-  return shell('DeepSeek Harness', `
+export function loginPage(lang: HubLang, error?: LoginError): string {
+  const copy = COPY[lang]
+  const message = error === undefined ? '' : `<p class="error">${escapeHtml(copy[error])}</p>`
+  return shell(lang, 'DeepSeek Harness', `
+    ${langSwitcher(lang, '/login')}
     <div class="brand">${MARK}DeepSeek Harness</div>
-    <h1>登录</h1>
-    ${error === undefined ? '' : `<p class="error">${escapeHtml(error)}</p>`}
+    <h1>${escapeHtml(copy.loginTitle)}</h1>
+    ${message}
     <form method="post" action="/login">
-      <label for="username">用户名</label>
+      <label for="username">${escapeHtml(copy.username)}</label>
       <input id="username" name="username" autocomplete="username" required>
-      <label for="password">密码</label>
+      <label for="password">${escapeHtml(copy.password)}</label>
       <input id="password" name="password" type="password" autocomplete="current-password" required>
-      <button type="submit">登录</button>
+      <button type="submit">${escapeHtml(copy.submit)}</button>
     </form>
   `)
 }
 
-export function offlinePage(username: string): string {
-  return shell('DeepSeek Harness', `
+export function offlinePage(lang: HubLang, username: string): string {
+  const copy = COPY[lang]
+  return shell(lang, 'DeepSeek Harness', `
+    ${langSwitcher(lang, '/')}
     <div class="brand">${MARK}DeepSeek Harness</div>
-    <h1>离线</h1>
-    <p>${escapeHtml(username)}：无在线工作站。</p>
+    <h1>${escapeHtml(copy.offlineTitle)}</h1>
+    <p>${escapeHtml(copy.noWorkstation(username))}</p>
     <div class="row">
-      <a class="btn ghost" href="/">刷新</a>
-      ${logoutForm()}
+      <a class="btn ghost" href="/">${escapeHtml(copy.refresh)}</a>
+      ${logoutForm(copy.signOut)}
     </div>
     <script>setTimeout(function () { location.reload() }, 3000)</script>
   `)

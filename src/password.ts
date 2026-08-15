@@ -7,11 +7,11 @@ const AGENT_SECRET_ENV = 'DSH_HUB_AGENT_SECRET'
 export const PASSWORD_ON_ARGV_ERROR = '--password is not supported; use a prompt, --password-file, or DSH_HUB_PASSWORD'
 
 export async function resolvePassword(passwordFile?: string): Promise<string> {
-  return resolveSecret({ file: passwordFile, env: PASSWORD_ENV, prompt: '密码' })
+  return resolveSecret({ file: passwordFile, env: PASSWORD_ENV, prompt: 'Password' })
 }
 
 export async function resolveAgentSecret(secretFile?: string): Promise<string> {
-  return resolveSecret({ file: secretFile, env: AGENT_SECRET_ENV, prompt: 'Agent 密钥' })
+  return resolveSecret({ file: secretFile, env: AGENT_SECRET_ENV, prompt: 'Agent secret' })
 }
 
 /**
@@ -21,7 +21,7 @@ export async function resolveAgentSecret(secretFile?: string): Promise<string> {
  */
 export async function resolveHashPlaintext(passwordFile?: string): Promise<string> {
   if (passwordFile !== undefined) return readPasswordFile(passwordFile)
-  return askSecret('要哈希的明文', 'pass --password-file (hash does not read DSH_HUB_PASSWORD)')
+  return askSecret('plaintext to hash', 'pass --password-file (hash does not read DSH_HUB_PASSWORD)')
 }
 
 export function readPasswordFile(path: string): string {

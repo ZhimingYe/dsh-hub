@@ -123,7 +123,7 @@ export function composeDshArgv(dshArgs: readonly string[], overlayPath: string):
 function nextValue(argv: readonly string[], index: number, flag: string): string {
   const value = argv[index + 1]
   if (value === undefined || value.startsWith('-')) {
-    throw new Error(`${flag} 后面需要一个值`)
+    throw new Error(`${flag} requires a value`)
   }
   return value
 }

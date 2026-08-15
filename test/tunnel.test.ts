@@ -106,7 +106,7 @@ test('wrong password is rejected', async () => {
     redirect: 'manual',
   })
   assert.equal(response.status, 401)
-  assert.match(await response.text(), /不正确/)
+  assert.match(await response.text(), /Incorrect username or password/)
 })
 
 test('alice can log in and reach DSH through the tunnel', async () => {
@@ -169,7 +169,7 @@ test('bob is authenticated but has no agent', async () => {
   const bob = await login('bob', 'bob-secret')
   const response = await fetch(`${origin}/hello`, { headers: { cookie: bob } })
   assert.equal(response.status, 503)
-  assert.match(await response.text(), /离线/)
+  assert.match(await response.text(), /no workstation online/)
 })
 
 test('logout revokes the session', async () => {
