@@ -2,10 +2,11 @@
  * ctx.webServer over a 0600 Unix socket.
  */
 import { createServer } from 'node:http'
-import { chmodSync, existsSync, mkdirSync, unlinkSync } from 'node:fs'
+import { chmodSync, existsSync, unlinkSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
+import { ensurePrivateDirectory } from './private-dir.js'
 
 /**
  * @typedef {'exact' | 'prefix'} WebRouteKind
@@ -85,7 +86,7 @@ export class WebServer extends Service {
   async [Service.init]() {
     const socketPath = this.config.socketPath
     if (socketPath.length === 0) throw new Error('webserver-unix: socketPath is empty')
-    mkdirSync(dirname(socketPath), { recursive: true, mode: 0o700 })
+    ensurePrivateDirectory(dirname(socketPath))
     if (existsSync(socketPath)) unlinkSync(socketPath)
 
     const handle = async (req, res) => {

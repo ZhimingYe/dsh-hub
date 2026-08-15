@@ -7,17 +7,16 @@ import assert from 'node:assert/strict'
 import { HubServer } from '../src/server.ts'
 import { HubAgent } from '../src/agent.ts'
 import { loadHubConfig } from '../src/config.ts'
+import { hashedHubYaml, TEST_AGENT_SECRET } from './hashed-yaml.ts'
 
 const dir = mkdtempSync(join(tmpdir(), 'dsh-hub-re-'))
 const socketPath = join(dir, 'dsh.sock')
 const configPath = join(dir, 'hub.yaml')
-writeFileSync(configPath, `
-host: 127.0.0.1
-port: 0
-agentSecret: "test-agent-secret-1"
-users:
-  alice: "alice-secret"
-`)
+writeFileSync(configPath, hashedHubYaml({
+  host: '127.0.0.1',
+  port: 0,
+  users: { alice: 'alice-secret' },
+}))
 
 const dsh = createServer((_req, res) => {
   res.writeHead(200)
@@ -41,7 +40,7 @@ before(async () => {
     hubUrl: `ws://127.0.0.1:${String(port)}/agent`,
     username: 'alice',
     password: 'alice-secret',
-    agentSecret: 'test-agent-secret-1',
+    agentSecret: TEST_AGENT_SECRET,
     socketPath,
   })
   void agent.runForever()

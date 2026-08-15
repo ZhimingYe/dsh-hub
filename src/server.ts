@@ -23,7 +23,8 @@ import {
   type RegisterOkPayload,
   type WsOpenPayload,
 } from './protocol.js'
-import { findUser, assertBindPolicy, type HubConfig } from './config.js'
+import { findUser, assertBindPolicy, type HubConfig, type HubUser } from './config.js'
+import { BCRYPT_ROUNDS, bcryptCost, dummyPasswordHash, verifySecret } from './hash.js'
 import {
   AUTH_FAILURE_MAX,
   AUTH_FAILURE_WINDOW_MS,
@@ -67,6 +68,7 @@ export interface HubListenOptions {
 
 export class HubServer {
   private readonly config: HubConfig
+  private readonly dummyPasswordHash: string
   private readonly sessions: SessionStore
   private readonly http: Server
   private readonly wss = new WebSocketServer({ noServer: true, perMessageDeflate: false, maxPayload: MAX_FRAME_BYTES })
@@ -78,6 +80,8 @@ export class HubServer {
 
   constructor(options: HubListenOptions) {
     this.config = options.config
+    const sample = options.config.users[0]?.passwordHash
+    this.dummyPasswordHash = dummyPasswordHash(bcryptCost(sample ?? '') ?? BCRYPT_ROUNDS)
     this.sessions = new SessionStore(options.config.sessionTtlSeconds * 1000)
     const listener = (req: IncomingMessage, res: ServerResponse): void => {
       void this.handleHttp(req, res)
@@ -187,10 +191,10 @@ export class HubServer {
       }
       await this.tunnelHttp(username, req, res)
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
+      console.error(error instanceof Error ? error : new Error(String(error)))
       if (!res.headersSent) {
         res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' })
-        res.end(message)
+        res.end('internal error')
       } else {
         res.destroy()
       }
@@ -208,7 +212,7 @@ export class HubServer {
       return
     }
     const user = findUser(this.config, username)
-    if (user === undefined || !passwordsEqual(password, user.password)) {
+    if (!this.passwordMatches(user, password)) {
       this.loginFailures.add(key)
       this.html(res, 401, loginPage('用户名或密码不正确'))
       return
@@ -312,8 +316,7 @@ export class HubServer {
     }
     const user = findUser(this.config, payload.username)
     const storedToken = user === undefined ? undefined : this.agentTokens.get(user.username)
-    const passwordOk = user !== undefined && payload.password !== undefined
-      && passwordsEqual(payload.password, user.password)
+    const passwordOk = payload.password !== undefined && this.passwordMatches(user, payload.password)
     const tokenOk = user !== undefined && payload.token !== undefined && storedToken !== undefined
       && passwordsEqual(payload.token, storedToken)
     if (user === undefined || (!passwordOk && !tokenOk)) {
@@ -495,10 +498,17 @@ export class HubServer {
     res.end(JSON.stringify(body))
   }
 
+  /** bcrypt-verify against the user hash or a dummy hash so a missing username is not a fast reject. */
+  private passwordMatches(user: HubUser | undefined, password: string): user is HubUser {
+    const hash = user?.passwordHash ?? this.dummyPasswordHash
+    const ok = verifySecret(password, hash)
+    return user !== undefined && ok
+  }
+
   private agentSecretOk(req: IncomingMessage): boolean {
     const token = bearerToken(req)
     if (token === undefined) return false
-    return passwordsEqual(token, this.config.agentSecret)
+    return verifySecret(token, this.config.agentSecretHash)
   }
 }
 

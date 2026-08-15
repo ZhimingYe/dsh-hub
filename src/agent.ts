@@ -94,7 +94,7 @@ export class HubAgent {
       const ws = new WebSocket(this.options.hubUrl, {
         handshakeTimeout: HANDSHAKE_TIMEOUT_MS,
         perMessageDeflate: false,
-        followRedirects: true,
+        followRedirects: false,
         maxPayload: MAX_FRAME_BYTES,
         headers: { authorization: `Bearer ${this.options.agentSecret}` },
         ...proxy !== undefined ? { agent: new HttpsProxyAgent(proxy) } : {},
@@ -290,11 +290,12 @@ export class HubAgent {
     }, res => { this.pipeHttpResponse(frame.streamId, res) })
     req.on('error', error => {
       this.httpStreams.delete(frame.streamId)
+      console.error(error)
       this.sendJson(FrameType.HttpRespOpen, frame.streamId, {
         status: 502,
         headers: [{ name: 'content-type', value: 'text/plain; charset=utf-8' }],
       })
-      this.send(FrameType.HttpRespData, frame.streamId, Buffer.from(error.message, 'utf8'))
+      this.send(FrameType.HttpRespData, frame.streamId, Buffer.from('bad gateway', 'utf8'))
       this.send(FrameType.HttpRespEnd, frame.streamId)
     })
     this.httpStreams.set(frame.streamId, req)
@@ -345,7 +346,8 @@ export class HubAgent {
     })
     target.on('error', error => {
       this.wsStreams.delete(frame.streamId)
-      this.sendJson(FrameType.WsOpenErr, frame.streamId, { error: error.message })
+      console.error(error)
+      this.sendJson(FrameType.WsOpenErr, frame.streamId, { error: 'bad gateway' })
     })
   }
 

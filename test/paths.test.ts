@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mkdirSync, writeFileSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { chmodSync, mkdirSync, writeFileSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { agentUrlFromHub, requireSecureHubUrl } from '../src/paths.ts'
-import { assertBindPolicy, loadHubConfig } from '../src/config.ts'
+import { headersForBrowser } from '../src/headers.ts'
+import { ensurePrivateDirectory } from '../webserver-unix/src/private-dir.js'
+import { assertBindPolicy, loadHubConfig, renderHubConfig, writeNewHubConfig } from '../src/config.ts'
+import { isBcryptHash, verifySecret } from '../src/hash.ts'
+import { hashedHubYaml, TEST_AGENT_SECRET } from './hashed-yaml.ts'
 import { composeDshArgv, isDshOneShot, parseConnectArgs } from '../src/connect-args.ts'
 import { FailureLimiter, clientKey, isForwardedHttps } from '../src/auth.ts'
 import { assertHubPluginsResolvable, ensureHubPluginLinks, hubPluginLinkRoots, hubPlugins } from '../src/setup-workstation.ts'
@@ -15,15 +19,16 @@ test('portal address becomes the agent websocket url', () => {
   assert.equal(agentUrlFromHub('10.0.0.8:8787'), 'ws://10.0.0.8:8787/agent')
 })
 
-test('config requires users and agentSecret', () => {
+test('config requires users and a bcrypt agentSecret', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-hub-cfg-'))
   const path = join(dir, 'hub.yaml')
-  writeFileSync(path, 'port: 9\nagentSecret: "test-agent-secret-1"\nusers:\n  alice: "secret"\n')
+  writeFileSync(path, hashedHubYaml({ port: 9, users: { alice: 'secret' } }))
   const config = loadHubConfig(path)
   assert.equal(config.users[0]?.username, 'alice')
   assert.equal(config.port, 9)
   assert.equal(config.host, '127.0.0.1')
-  assert.equal(config.agentSecret, 'test-agent-secret-1')
+  assert.equal(isBcryptHash(config.agentSecretHash), true)
+  assert.equal(verifySecret(TEST_AGENT_SECRET, config.agentSecretHash), true)
   assert.equal(config.allowPlainHttp, false)
   rmSync(dir, { recursive: true, force: true })
 })
@@ -128,13 +133,11 @@ test('plain http to a non-loopback hub url is refused unless opted in', () => {
 test('non-loopback bind requires allowPlainHttp', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-hub-bind-'))
   const path = join(dir, 'hub.yaml')
-  writeFileSync(path, `
-host: 0.0.0.0
-port: 9
-agentSecret: "test-agent-secret-1"
-users:
-  alice: "secret"
-`)
+  writeFileSync(path, hashedHubYaml({
+    host: '0.0.0.0',
+    port: 9,
+    users: { alice: 'secret' },
+  }))
   const config = loadHubConfig(path)
   assert.throws(() => assertBindPolicy(config), /allowPlainHttp/)
   config.allowPlainHttp = true
@@ -142,13 +145,51 @@ users:
   rmSync(dir, { recursive: true, force: true })
 })
 
-test('config rejects a missing or short agentSecret', () => {
+test('config rejects a missing, plaintext, or malformed agentSecret', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-hub-secret-'))
   const path = join(dir, 'hub.yaml')
-  writeFileSync(path, 'port: 9\nusers:\n  alice: "secret"\n')
+  const hashed = hashedHubYaml({ port: 9, users: { alice: 'secret' } })
+  writeFileSync(path, hashed.replace(/^agentSecret: .*\n/m, ''))
   assert.throws(() => loadHubConfig(path), /agentSecret/)
-  writeFileSync(path, 'port: 9\nagentSecret: "short"\nusers:\n  alice: "secret"\n')
-  assert.throws(() => loadHubConfig(path), /agentSecret/)
+  writeFileSync(path, hashed.replace(/agentSecret: .*/, 'agentSecret: "test-agent-secret-1"'))
+  assert.throws(() => loadHubConfig(path), /bcrypt/)
+  writeFileSync(path, hashed.replace(/agentSecret: .*/, 'agentSecret: "short"'))
+  assert.throws(() => loadHubConfig(path), /bcrypt/)
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('config rejects a plaintext user password', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-hub-pw-'))
+  const path = join(dir, 'hub.yaml')
+  writeFileSync(path, hashedHubYaml({ port: 9, users: { alice: 'secret' } }).replace(/alice: .*/, 'alice: "secret"'))
+  assert.throws(() => loadHubConfig(path), /bcrypt/)
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('renderHubConfig writes bcrypt hashes, not plaintext', () => {
+  const yaml = renderHubConfig({
+    port: 9,
+    username: 'alice',
+    password: 'alice-secret',
+    agentSecret: TEST_AGENT_SECRET,
+  })
+  assert.doesNotMatch(yaml, /alice-secret/)
+  assert.doesNotMatch(yaml, new RegExp(TEST_AGENT_SECRET))
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-hub-render-'))
+  const path = join(dir, 'hub.yaml')
+  writeFileSync(path, yaml)
+  const config = loadHubConfig(path)
+  assert.equal(verifySecret('alice-secret', config.users[0]?.passwordHash ?? ''), true)
+  assert.equal(verifySecret(TEST_AGENT_SECRET, config.agentSecretHash), true)
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('writeNewHubConfig creates mode 0600 and refuses to overwrite', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-hub-wx-'))
+  const path = join(dir, 'hub.yaml')
+  writeNewHubConfig(path, hashedHubYaml({ port: 9, users: { alice: 'secret' } }))
+  assert.equal(statSync(path).mode & 0o777, 0o600)
+  assert.throws(() => writeNewHubConfig(path, 'port: 1\n'), /EEXIST/)
   rmSync(dir, { recursive: true, force: true })
 })
 
@@ -196,4 +237,41 @@ test('hub plugins link into the dsh install and the workstation profile', () => 
   writeFileSync(join(dshRoot, 'package.json'), '{}\n')
   assertHubPluginsResolvable(profileDir, dshRoot)
   rmSync(root, { recursive: true, force: true })
+})
+
+test('headersForBrowser drops Set-Cookie', () => {
+  const out = headersForBrowser([
+    { name: 'content-type', value: 'text/plain' },
+    { name: 'Set-Cookie', value: 'dsh_hub_session=stolen' },
+    { name: 'set-cookie2', value: 'other=1' },
+  ])
+  assert.equal(out['content-type'], 'text/plain')
+  assert.equal(out['set-cookie'], undefined)
+  assert.equal(out['set-cookie2'], undefined)
+})
+
+test('ensurePrivateDirectory creates mode 0700 and tightens a too-open dir', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-hub-sockdir-'))
+  const nested = join(root, 'nested')
+  ensurePrivateDirectory(nested)
+  assert.equal(statSync(nested).mode & 0o777, 0o700)
+
+  chmodSync(nested, 0o755)
+  ensurePrivateDirectory(nested)
+  assert.equal(statSync(nested).mode & 0o777, 0o700)
+  rmSync(root, { recursive: true, force: true })
+})
+
+test('ensurePrivateDirectory refuses a symlink or a file', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-hub-sockdir-'))
+  const target = mkdtempSync(join(tmpdir(), 'dsh-hub-sockdir-target-'))
+  const link = join(root, 'link')
+  symlinkSync(target, link)
+  assert.throws(() => { ensurePrivateDirectory(link) }, /符号链接/)
+
+  const file = join(root, 'file')
+  writeFileSync(file, 'x')
+  assert.throws(() => { ensurePrivateDirectory(file) })
+  rmSync(root, { recursive: true, force: true })
+  rmSync(target, { recursive: true, force: true })
 })

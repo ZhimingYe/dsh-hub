@@ -29,6 +29,12 @@ const STRIP_TO_DSH = new Set([
   'sec-ch-ua-platform',
 ])
 
+const STRIP_TO_BROWSER = new Set([
+  ...HOP_BY_HOP,
+  'set-cookie',
+  'set-cookie2',
+])
+
 export function incomingToPairs(headers: IncomingHttpHeaders): HeaderPair[] {
   const pairs: HeaderPair[] = []
   for (const [name, value] of Object.entries(headers)) {
@@ -68,8 +74,12 @@ export function headersForDsh(pairs: HeaderPair[]): Record<string, string> {
   return out
 }
 
+/**
+ * Forward dsh response headers to the browser. Drops hop-by-hop headers and
+ * `Set-Cookie` so a tunneled plugin cannot overwrite `dsh_hub_session`.
+ */
 export function headersForBrowser(pairs: HeaderPair[]): Record<string, string | string[]> {
-  return pairsToRecord(filterPairs(pairs, HOP_BY_HOP))
+  return pairsToRecord(filterPairs(pairs, STRIP_TO_BROWSER))
 }
 
 export function wsHeadersForDsh(pairs: HeaderPair[]): Record<string, string> {

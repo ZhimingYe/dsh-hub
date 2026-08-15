@@ -1,12 +1,14 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { parse } from 'yaml'
+import { hashSecret, isBcryptHash } from './hash.js'
 
 export const AGENT_SECRET_MIN_LENGTH = 16
 
 export interface HubUser {
   username: string
-  password: string
+  /** bcrypt hash from `hub.yaml` `users.<name>`. */
+  passwordHash: string
 }
 
 export interface HubConfig {
@@ -14,8 +16,8 @@ export interface HubConfig {
   port: number
   sessionTtlSeconds: number
   users: HubUser[]
-  /** Shared secret required on every `/agent` WebSocket upgrade (`Authorization: Bearer`). */
-  agentSecret: string
+  /** bcrypt hash of the `/agent` Bearer secret; plaintext is never stored. */
+  agentSecretHash: string
   /** When true, Hub may bind a non-loopback address over cleartext HTTP. */
   allowPlainHttp: boolean
   /** TCP peers allowed to supply `X-Forwarded-For` / `X-Forwarded-Proto`. Empty means ignore those headers. */
@@ -37,22 +39,27 @@ export function isLoopbackBind(host: string): boolean {
   return value === '127.0.0.1' || value === '::1' || value === 'localhost'
 }
 
+/**
+ * Load `hub.yaml`. `users.*` and `agentSecret` must already be bcrypt hashes.
+ * @param path - config file path.
+ * @returns parsed config.
+ */
 export function loadHubConfig(path: string): HubConfig {
   const raw = parse(readFileSync(resolve(path), 'utf8')) as RawConfig | null
   if (raw === null || typeof raw !== 'object') throw new Error(`invalid config: ${path}`)
-  const users = Object.entries(raw.users ?? {}).map(([username, password]) => {
-    if (typeof password !== 'string' || password.length === 0) {
-      throw new Error(`empty password for ${username}`)
+  const users = Object.entries(raw.users ?? {}).map(([username, passwordHash]) => {
+    if (typeof passwordHash !== 'string' || !isBcryptHash(passwordHash)) {
+      throw new Error(`users.${username} must be a bcrypt hash (dsh-hub hash)`)
     }
-    return { username, password }
+    return { username, passwordHash }
   })
   if (users.length === 0) throw new Error('users is required')
   const port = raw.port ?? 8787
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new Error(`invalid port: ${String(raw.port)}`)
   }
-  if (typeof raw.agentSecret !== 'string' || raw.agentSecret.length < AGENT_SECRET_MIN_LENGTH) {
-    throw new Error(`agentSecret is required (min ${String(AGENT_SECRET_MIN_LENGTH)} characters)`)
+  if (typeof raw.agentSecret !== 'string' || !isBcryptHash(raw.agentSecret)) {
+    throw new Error('agentSecret must be a bcrypt hash; first `dsh-hub serve` writes it')
   }
   if (raw.allowPlainHttp !== undefined && typeof raw.allowPlainHttp !== 'boolean') {
     throw new Error('allowPlainHttp must be a boolean')
@@ -64,7 +71,7 @@ export function loadHubConfig(path: string): HubConfig {
     port,
     sessionTtlSeconds: raw.sessionTtlSeconds ?? 60 * 60 * 24 * 7,
     users,
-    agentSecret: raw.agentSecret,
+    agentSecretHash: raw.agentSecret,
     allowPlainHttp,
     trustedProxies: parseTrustedProxies(raw.trustedProxies),
   }
@@ -82,19 +89,41 @@ export function findUser(config: HubConfig, username: string): HubUser | undefin
   return config.users.find(user => user.username === username)
 }
 
+/**
+ * Render a new `hub.yaml` with bcrypt hashes of `password` and `agentSecret`.
+ * @param options.port - listen port.
+ * @param options.username - first user.
+ * @param options.password - plaintext password; not written.
+ * @param options.agentSecret - plaintext Bearer secret; not written; min {@link AGENT_SECRET_MIN_LENGTH}.
+ * @returns yaml text with hashed secrets.
+ */
 export function renderHubConfig(options: {
   port: number
   username: string
   password: string
   agentSecret: string
 }): string {
+  if (options.password.length === 0) throw new Error('password is required')
+  if (options.agentSecret.length < AGENT_SECRET_MIN_LENGTH) {
+    throw new Error(`agentSecret is required (min ${String(AGENT_SECRET_MIN_LENGTH)} characters)`)
+  }
   return [
     `port: ${String(options.port)}`,
-    `agentSecret: ${JSON.stringify(options.agentSecret)}`,
+    `agentSecret: ${JSON.stringify(hashSecret(options.agentSecret))}`,
     'users:',
-    `  ${options.username}: ${JSON.stringify(options.password)}`,
+    `  ${options.username}: ${JSON.stringify(hashSecret(options.password))}`,
     '',
   ].join('\n')
+}
+
+/**
+ * Create `hub.yaml` only if `path` does not exist.
+ * @param path - destination path.
+ * @param yaml - file contents from {@link renderHubConfig}.
+ * @throws if `path` already exists.
+ */
+export function writeNewHubConfig(path: string, yaml: string): void {
+  writeFileSync(path, yaml, { flag: 'wx', mode: 0o600 })
 }
 
 function parseTrustedProxies(raw: unknown): string[] {

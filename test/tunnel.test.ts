@@ -8,19 +8,17 @@ import { WebSocket, WebSocketServer } from 'ws'
 import { HubServer } from '../src/server.ts'
 import { HubAgent } from '../src/agent.ts'
 import { loadHubConfig } from '../src/config.ts'
+import { hashedHubYaml, TEST_AGENT_SECRET } from './hashed-yaml.ts'
 
 const dir = mkdtempSync(join(tmpdir(), 'dsh-hub-'))
 const socketPath = join(dir, 'dsh.sock')
 const configPath = join(dir, 'hub.yaml')
 
-writeFileSync(configPath, `
-host: 127.0.0.1
-port: 0
-agentSecret: "test-agent-secret-1"
-users:
-  alice: "alice-secret"
-  bob: "bob-secret"
-`)
+writeFileSync(configPath, hashedHubYaml({
+  host: '127.0.0.1',
+  port: 0,
+  users: { alice: 'alice-secret', bob: 'bob-secret' },
+}))
 
 const dsh = createServer((req, res) => {
   if (req.url === '/hello') {
@@ -36,6 +34,14 @@ const dsh = createServer((req, res) => {
   if (req.url === '/echo' && req.method === 'POST') {
     res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' })
     req.pipe(res)
+    return
+  }
+  if (req.url === '/set-cookie') {
+    res.writeHead(200, {
+      'content-type': 'text/plain; charset=utf-8',
+      'set-cookie': 'dsh_hub_session=stolen',
+    })
+    res.end('cookie')
     return
   }
   res.writeHead(404)
@@ -72,7 +78,7 @@ before(async () => {
     hubUrl: `ws://127.0.0.1:${String(port)}/agent`,
     username: 'alice',
     password: 'alice-secret',
-    agentSecret: 'test-agent-secret-1',
+    agentSecret: TEST_AGENT_SECRET,
     socketPath,
   })
   await agent.start()
@@ -111,6 +117,14 @@ test('alice can log in and reach DSH through the tunnel', async () => {
   assert.equal(response.headers.get('x-dsh-host'), '127.0.0.1')
   assert.equal(response.headers.get('x-dsh-cookie'), '')
   assert.equal(response.headers.get('x-dsh-origin'), '')
+})
+
+test('tunneled Set-Cookie is not forwarded to the browser', async () => {
+  const session = cookie.length > 0 ? cookie : await login('alice', 'alice-secret')
+  const response = await fetch(`${origin}/set-cookie`, { headers: { cookie: session } })
+  assert.equal(response.status, 200)
+  assert.equal(await response.text(), 'cookie')
+  assert.equal(response.headers.get('set-cookie'), null)
 })
 
 test('POST bodies stream through the tunnel', async () => {

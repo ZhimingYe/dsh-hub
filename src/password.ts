@@ -14,6 +14,16 @@ export async function resolveAgentSecret(secretFile?: string): Promise<string> {
   return resolveSecret({ file: secretFile, env: AGENT_SECRET_ENV, prompt: 'Agent 密钥' })
 }
 
+/**
+ * Plaintext for `dsh-hub hash`. Does not read `DSH_HUB_PASSWORD` or `DSH_HUB_AGENT_SECRET`.
+ * @param passwordFile - optional mode-`0600` file of the value to hash.
+ * @returns the plaintext to hash.
+ */
+export async function resolveHashPlaintext(passwordFile?: string): Promise<string> {
+  if (passwordFile !== undefined) return readPasswordFile(passwordFile)
+  return askSecret('要哈希的明文', 'pass --password-file (hash does not read DSH_HUB_PASSWORD)')
+}
+
 export function readPasswordFile(path: string): string {
   const mode = statSync(path).mode & 0o777
   if ((mode & 0o044) !== 0) {
@@ -28,12 +38,12 @@ async function resolveSecret(options: { file?: string; env: string; prompt: stri
   if (options.file !== undefined) return readPasswordFile(options.file)
   const fromEnv = process.env[options.env]
   if (fromEnv !== undefined && fromEnv.length > 0) return fromEnv
-  return askSecret(options.prompt, options.env)
+  return askSecret(options.prompt, `set ${options.env} or pass a secret file`)
 }
 
-async function askSecret(label: string, env: string): Promise<string> {
+async function askSecret(label: string, noTtyHint: string): Promise<string> {
   if (!stdinStream.isTTY) {
-    throw new Error(`no TTY; set ${env} or pass a secret file`)
+    throw new Error(`no TTY; ${noTtyHint}`)
   }
   stdoutStream.write(`${label}: `)
   const previous = stdinStream.isRaw

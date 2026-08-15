@@ -1,5 +1,13 @@
 import { join } from 'node:path'
 
+/**
+ * User-private Unix socket for the tunneled dsh web server.
+ * Parent directory is `$XDG_RUNTIME_DIR/dsh-hub-<uid>/`, or
+ * `/tmp/dsh-hub-<uid>/` when `XDG_RUNTIME_DIR` is unset. `webserver-unix`
+ * refuses to listen unless that directory is owned by this uid and mode
+ * `0700` (not a symlink). Shared HPC login nodes should set
+ * `XDG_RUNTIME_DIR`.
+ */
 export function internalSocketPath(): string {
   const uid = String(process.getuid?.() ?? 0)
   const root = process.env.XDG_RUNTIME_DIR ?? '/tmp'

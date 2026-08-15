@@ -7,18 +7,17 @@ import { WebSocket } from 'ws'
 import { HubServer } from '../src/server.ts'
 import { HubAgent } from '../src/agent.ts'
 import { loadHubConfig } from '../src/config.ts'
+import { hashedHubYaml, TEST_AGENT_SECRET } from './hashed-yaml.ts'
 
-const SECRET = 'test-agent-secret-1'
+const SECRET = TEST_AGENT_SECRET
 const dir = mkdtempSync(join(tmpdir(), 'dsh-hub-sec-'))
 const socketPath = join(dir, 'dsh.sock')
 const configPath = join(dir, 'hub.yaml')
-writeFileSync(configPath, `
-host: 127.0.0.1
-port: 0
-agentSecret: "${SECRET}"
-users:
-  alice: "alice-secret"
-`)
+writeFileSync(configPath, hashedHubYaml({
+  host: '127.0.0.1',
+  port: 0,
+  users: { alice: 'alice-secret' },
+}))
 
 const hub = new HubServer({ config: loadHubConfig(configPath) })
 let origin = ''
@@ -67,6 +66,16 @@ test('agent with secret and password registers', async () => {
   await agent.start()
   assert.equal(hub.agentOnline('alice'), true)
   await agent.stop()
+})
+
+test('login with an unknown username is 401', async () => {
+  const response = await fetch(`${origin}/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: 'username=nobody&password=alice-secret',
+    redirect: 'manual',
+  })
+  assert.equal(response.status, 401)
 })
 
 test('login ignores spoofed X-Forwarded-Proto when trustedProxies is empty', async () => {

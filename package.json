@@ -19,18 +19,20 @@
     "build": "tsc -p tsconfig.json",
     "serve": "node --import tsx/esm src/cli.ts serve",
     "connect": "node --import tsx/esm src/cli.ts connect",
-    "test": "node --import tsx/esm --test --test-concurrency=1 --test-timeout=15000 test/*.test.ts"
+    "test": "node --import tsx/esm --test --test-concurrency=1 --test-timeout=30000 test/*.test.ts"
   },
   "engines": {
     "node": ">=22.19.0"
   },
   "dependencies": {
+    "bcryptjs": "^2.4.3",
     "https-proxy-agent": "^7.0.6",
     "tsx": "^4.19.4",
     "ws": "^8.18.3",
     "yaml": "^2.8.1"
   },
   "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
     "@types/node": "^22.15.3",
     "@types/ws": "^8.18.1",
     "typescript": "^5.8.3"

@@ -10,7 +10,8 @@
     "./package.json": "./package.json"
   },
   "files": [
-    "src/index.js"
+    "src/index.js",
+    "src/private-dir.js"
   ],
   "license": "MIT",
   "peerDependencies": {

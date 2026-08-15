@@ -1,4 +1,4 @@
-import { existsSync, writeFileSync, chmodSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { resolve } from 'node:path'
 import { createInterface } from 'node:readline/promises'
@@ -7,19 +7,23 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { parseArgs } from 'node:util'
 import { HubServer } from './server.js'
 import { HubAgent } from './agent.js'
-import { assertBindPolicy, isLoopbackBind, loadHubConfig, renderHubConfig } from './config.js'
+import { assertBindPolicy, isLoopbackBind, loadHubConfig, renderHubConfig, writeNewHubConfig } from './config.js'
+import { hashSecret } from './hash.js'
 import { agentUrlFromHub, internalSocketPath, requireSecureHubUrl } from './paths.js'
 import { dshLaunchArgs, setupWorkstationProfile, workstationOverlayPath } from './setup-workstation.js'
 import { HelpRequested, composeDshArgv, isDshOneShot, parseConnectArgs } from './connect-args.js'
-import { resolveAgentSecret, resolvePassword } from './password.js'
+import { resolveAgentSecret, resolveHashPlaintext, resolvePassword } from './password.js'
 
 const HELP = `dsh-hub
 
   dsh-hub serve [--user NAME] [--config PATH] [--port N] [--password-file PATH] [--allow-plain-http]
   dsh-hub connect <url> [--user NAME] [--password-file PATH] [--agent-secret-file PATH] [--allow-plain-http] [dsh-args...]
+  dsh-hub hash [--password-file PATH]
 
 Password: prompt, --password-file, or DSH_HUB_PASSWORD.
 Agent secret: prompt, --agent-secret-file, or DSH_HUB_AGENT_SECRET.
+hash plaintext: prompt or --password-file (not DSH_HUB_PASSWORD).
+hash prints a bcrypt value for hub.yaml (users or agentSecret).
 Extra connect arguments are forwarded to dsh.
 `
 
@@ -45,6 +49,10 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     }
     return
   }
+  if (command === 'hash') {
+    await hashCommand(argv.slice(1))
+    return
+  }
   throw new Error(`未知命令 ${command}\n\n${HELP}`)
 }
 
@@ -54,7 +62,7 @@ async function serve(argv: string[]): Promise<void> {
     options: {
       port: { type: 'string' },
       user: { type: 'string', short: 'u' },
-      passwordFile: { type: 'string' },
+      'password-file': { type: 'string' },
       config: { type: 'string', short: 'c' },
       'allow-plain-http': { type: 'boolean' },
     },
@@ -64,12 +72,12 @@ async function serve(argv: string[]): Promise<void> {
   if (!existsSync(configPath)) {
     const port = values.port !== undefined ? Number(values.port) : 8787
     const username = values.user ?? await ask('用户名')
-    const password = await resolvePassword(values.passwordFile)
+    const password = await resolvePassword(values['password-file'])
     if (username.length === 0 || password.length === 0) throw new Error('username and password required')
     const agentSecret = randomBytes(32).toString('base64url')
-    writeFileSync(configPath, renderHubConfig({ port, username, password, agentSecret }))
-    chmodSync(configPath, 0o600)
+    writeNewHubConfig(configPath, renderHubConfig({ port, username, password, agentSecret }))
     console.log(`wrote ${configPath}`)
+    console.log(`DSH_HUB_AGENT_SECRET=${agentSecret}`)
   }
   const config = loadHubConfig(configPath)
   if (values.port !== undefined) config.port = Number(values.port)
@@ -83,7 +91,19 @@ async function serve(argv: string[]): Promise<void> {
     console.warn('warning: allowPlainHttp binds without TLS; passwords and cookies travel in cleartext')
   }
   console.log(`connect: dsh-hub connect http://<host>:${String(port)} --user ${config.users[0]?.username ?? 'USER'}`)
-  console.log('agent secret: hub.yaml agentSecret (HPC: DSH_HUB_AGENT_SECRET or --agent-secret-file)')
+}
+
+async function hashCommand(argv: string[]): Promise<void> {
+  const { values } = parseArgs({
+    args: argv,
+    options: {
+      'password-file': { type: 'string' },
+    },
+    allowPositionals: false,
+  })
+  const plaintext = await resolveHashPlaintext(values['password-file'])
+  if (plaintext.length === 0) throw new Error('empty secret')
+  process.stdout.write(`${hashSecret(plaintext)}\n`)
 }
 
 async function connect(argv: string[]): Promise<void> {
