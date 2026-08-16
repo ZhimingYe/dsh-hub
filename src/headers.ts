@@ -56,6 +56,7 @@ export const HUB_HTML_SECURITY_HEADERS: Record<string, string> = {
   'referrer-policy': 'no-referrer',
   'x-content-type-options': 'nosniff',
   'x-frame-options': 'DENY',
+  'x-robots-tag': 'noindex, nofollow',
 }
 
 /**
@@ -67,6 +68,7 @@ export const HUB_API_SECURITY_HEADERS: Record<string, string> = {
   'referrer-policy': 'no-referrer',
   'x-content-type-options': 'nosniff',
   'x-frame-options': 'DENY',
+  'x-robots-tag': 'noindex, nofollow',
 }
 
 const TUNNEL_SECURITY_HEADERS: Record<string, string> = {

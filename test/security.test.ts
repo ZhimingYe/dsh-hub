@@ -261,6 +261,21 @@ test('login HTML carries clickjacking and nosniff headers', async () => {
   assert.match(response.headers.get('content-security-policy') ?? '', /frame-ancestors 'none'/)
   assert.equal(response.headers.get('x-content-type-options'), 'nosniff')
   assert.equal(response.headers.get('cache-control'), 'no-store')
+  assert.equal(response.headers.get('x-robots-tag'), 'noindex, nofollow')
+})
+
+test('login page has no brand name and is not indexed', async () => {
+  const english = await fetch(`${origin}/login`)
+  const html = await english.text()
+  assert.doesNotMatch(html, /DeepSeek Harness/)
+  assert.match(html, /<title>Sign in<\/title>/)
+  assert.match(html, /<meta name="robots" content="noindex, nofollow">/)
+  const switched = await fetch(`${origin}/lang?set=zh&next=/login`, { redirect: 'manual' })
+  const cookie = switched.headers.get('set-cookie') ?? ''
+  const chinese = await fetch(`${origin}/login`, { headers: { cookie } })
+  const zhHtml = await chinese.text()
+  assert.match(zhHtml, /<title>登录<\/title>/)
+  assert.doesNotMatch(zhHtml, /DeepSeek Harness/)
 })
 
 test('cross-site browser websocket upgrade is 403', async () => {

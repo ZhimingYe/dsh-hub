@@ -169,6 +169,7 @@ function shell(lang: HubLang, title: string, body: string): string {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
   <title>${escapeHtml(title)}</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <style>${STYLES}</style>
@@ -186,9 +187,8 @@ export function logoutForm(label: string): string {
 export function loginPage(lang: HubLang, error?: LoginError): string {
   const copy = COPY[lang]
   const message = error === undefined ? '' : `<p class="error">${escapeHtml(copy[error])}</p>`
-  return shell(lang, 'DeepSeek Harness', `
+  return shell(lang, copy.loginTitle, `
     ${langSwitcher(lang, '/login')}
-    <div class="brand">${MARK}DeepSeek Harness</div>
     <h1>${escapeHtml(copy.loginTitle)}</h1>
     ${message}
     <form method="post" action="/login">
