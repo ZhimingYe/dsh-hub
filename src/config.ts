@@ -1,8 +1,11 @@
 import { lstatSync, readFileSync, writeFileSync } from 'node:fs'
 import { isIP } from 'node:net'
-import { resolve } from 'node:path'
+import { dirname, isAbsolute, resolve } from 'node:path'
 import { parse } from 'yaml'
 import { hashSecret, isBcryptHash } from './hash.js'
+
+/** Login-audit JSONL written next to `hub.yaml` when `auditLog` is omitted. */
+export const AUDIT_LOG_BASENAME = 'hub.audit.log'
 
 export const AGENT_SECRET_MIN_LENGTH = 16
 
@@ -35,6 +38,8 @@ export interface HubConfig {
   allowPlainHttp: boolean
   /** TCP peers allowed to supply `X-Forwarded-For` / `X-Forwarded-Proto`. Empty means ignore those headers. */
   trustedProxies: string[]
+  /** Absolute path of the login-audit JSONL file. */
+  auditLogPath: string
 }
 
 interface RawConfig {
@@ -45,6 +50,7 @@ interface RawConfig {
   agentSecret?: string
   allowPlainHttp?: boolean
   trustedProxies?: unknown
+  auditLog?: unknown
 }
 
 export function isLoopbackBind(host: string): boolean {
@@ -54,6 +60,7 @@ export function isLoopbackBind(host: string): boolean {
 
 /**
  * Load `hub.yaml`. `users.*` and `agentSecret` must already be bcrypt hashes.
+ * `auditLog` defaults to `hub.audit.log` beside this file.
  * @param path - config file path.
  * @returns parsed config.
  */
@@ -90,6 +97,7 @@ export function loadHubConfig(path: string): HubConfig {
     agentSecretHash: raw.agentSecret,
     allowPlainHttp,
     trustedProxies: parseTrustedProxies(raw.trustedProxies),
+    auditLogPath: parseAuditLogPath(dirname(resolved), raw.auditLog),
   }
 }
 
@@ -162,6 +170,15 @@ function parseSessionTtl(raw: unknown): number {
     )
   }
   return raw
+}
+
+function parseAuditLogPath(configDir: string, raw: unknown): string {
+  if (raw === undefined) return resolve(configDir, AUDIT_LOG_BASENAME)
+  if (typeof raw !== 'string' || raw.trim().length === 0) {
+    throw new Error('auditLog must be a non-empty path')
+  }
+  const value = raw.trim()
+  return isAbsolute(value) ? value : resolve(configDir, value)
 }
 
 function parseTrustedProxies(raw: unknown): string[] {

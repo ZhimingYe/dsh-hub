@@ -86,7 +86,11 @@ async function serve(argv: string[]): Promise<void> {
   const hub = new HubServer({ config })
   const port = await hub.listen()
   console.log(`config: ${configPath}`)
+  console.log(`audit: ${config.auditLogPath}`)
   console.log(`listen: http://127.0.0.1:${String(port)}`)
+  if (isLoopbackBind(config.host) && config.trustedProxies.length === 0) {
+    console.warn('warning: trustedProxies is empty; login audit IPs will be 127.0.0.1 behind a reverse proxy. List the proxy (usually 127.0.0.1) to record X-Forwarded-For')
+  }
   if (!isLoopbackBind(config.host)) {
     console.warn('warning: allowPlainHttp binds without TLS; passwords and cookies travel in cleartext')
   }

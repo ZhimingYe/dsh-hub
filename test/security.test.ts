@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -7,7 +7,7 @@ import assert from 'node:assert/strict'
 import { WebSocket } from 'ws'
 import { HubServer } from '../src/server.ts'
 import { HubAgent } from '../src/agent.ts'
-import { loadHubConfig } from '../src/config.ts'
+import { AUDIT_LOG_BASENAME, loadHubConfig } from '../src/config.ts'
 import { writeHashedHubYaml, TEST_AGENT_SECRET } from './hashed-yaml.ts'
 
 const SECRET = TEST_AGENT_SECRET
@@ -91,10 +91,82 @@ test('a takeover agent keeps its reconnect token when the replaced agent drops',
   // not delete the second agent's reconnect token.
   const firstWs = first['ws']
   assert.ok(firstWs)
-  await new Promise<void>(resolve => firstWs.once('close', resolve))
+  if (firstWs.readyState !== WebSocket.CLOSED) {
+    await new Promise<void>(resolve => firstWs.once('close', resolve))
+  }
   assert.equal(hub.agentOnline('alice'), true)
   await second.stop()
   await first.stop()
+})
+
+test('login audit records success and failure, ignoring spoofed X-Forwarded-For', async () => {
+  const auditPath = join(dir, AUDIT_LOG_BASENAME)
+  const failed = await fetch(`${origin}/login`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded',
+      'x-forwarded-for': '203.0.113.9',
+    },
+    body: 'username=nobody&password=alice-secret',
+    redirect: 'manual',
+  })
+  assert.equal(failed.status, 401)
+  const ok = await fetch(`${origin}/login`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded',
+      'x-forwarded-for': '203.0.113.9',
+    },
+    body: 'username=alice&password=alice-secret',
+    redirect: 'manual',
+  })
+  assert.equal(ok.status, 302)
+  const lines = readFileSync(auditPath, 'utf8').trim().split('\n').map(line => JSON.parse(line) as {
+    event: string
+    ip: string
+    user?: string
+  })
+  const fail = lines.find(line => line.event === 'login.fail')
+  const success = lines.find(line => line.event === 'login.ok')
+  assert.ok(fail)
+  assert.equal(fail.ip, '127.0.0.1')
+  assert.equal(fail.user, 'nobody')
+  assert.ok(success)
+  assert.equal(success.ip, '127.0.0.1')
+  assert.equal(success.user, 'alice')
+})
+
+test('login audit uses the rightmost X-Forwarded-For hop from a trusted proxy', async () => {
+  const proxyDir = mkdtempSync(join(tmpdir(), 'dsh-hub-audit-'))
+  const proxyConfig = join(proxyDir, 'hub.yaml')
+  writeHashedHubYaml(proxyConfig, {
+    host: '127.0.0.1',
+    port: 0,
+    users: { alice: 'alice-secret' },
+    extra: 'trustedProxies:\n  - 127.0.0.1',
+  })
+  const proxyHub = new HubServer({ config: loadHubConfig(proxyConfig) })
+  const proxyPort = await proxyHub.listen()
+  try {
+    const response = await fetch(`http://127.0.0.1:${String(proxyPort)}/login`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        'x-forwarded-for': '198.51.100.7, 203.0.113.50',
+      },
+      body: 'username=alice&password=alice-secret',
+      redirect: 'manual',
+    })
+    assert.equal(response.status, 302)
+    const lines = readFileSync(join(proxyDir, AUDIT_LOG_BASENAME), 'utf8').trim().split('\n')
+    const last = JSON.parse(lines[lines.length - 1] ?? '{}') as { event: string; ip: string; user?: string }
+    assert.equal(last.event, 'login.ok')
+    assert.equal(last.ip, '203.0.113.50')
+    assert.equal(last.user, 'alice')
+  } finally {
+    await proxyHub.close()
+    rmSync(proxyDir, { recursive: true, force: true })
+  }
 })
 
 test('login with an unknown username is 401', async () => {

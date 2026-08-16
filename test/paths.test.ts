@@ -7,7 +7,8 @@ import { agentUrlFromHub, requireSecureHubUrl } from '../src/paths.ts'
 import { headersForBrowser } from '../src/headers.ts'
 import { ensurePrivateDirectory } from '../webserver-unix/src/private-dir.js'
 import { parseHubLang, safeNextPath } from '../src/locale.ts'
-import { assertBindPolicy, assertUsername, loadHubConfig, renderHubConfig, writeNewHubConfig } from '../src/config.ts'
+import { AUDIT_LOG_BASENAME, assertBindPolicy, assertUsername, loadHubConfig, renderHubConfig, writeNewHubConfig } from '../src/config.ts'
+import { auditUsername, formatLoginAuditLine } from '../src/audit.ts'
 import { isBcryptHash, verifySecret } from '../src/hash.ts'
 import { hashedHubYaml, writeHashedHubYaml, TEST_AGENT_SECRET } from './hashed-yaml.ts'
 import { composeDshArgv, isDshOneShot, parseConnectArgs } from '../src/connect-args.ts'
@@ -192,6 +193,30 @@ test('renderHubConfig writes bcrypt hashes, not plaintext', () => {
   assert.equal(verifySecret('alice-secret', config.users[0]?.passwordHash ?? ''), true)
   assert.equal(verifySecret(TEST_AGENT_SECRET, config.agentSecretHash), true)
   rmSync(dir, { recursive: true, force: true })
+})
+
+test('auditLog defaults next to hub.yaml and accepts a relative path', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-hub-auditcfg-'))
+  const path = join(dir, 'hub.yaml')
+  writeHashedHubYaml(path, { port: 9, users: { alice: 'secret' } })
+  assert.equal(loadHubConfig(path).auditLogPath, join(dir, AUDIT_LOG_BASENAME))
+  writeHashedHubYaml(path, { port: 9, users: { alice: 'secret' }, extra: 'auditLog: custom.audit.log' })
+  assert.equal(loadHubConfig(path).auditLogPath, join(dir, 'custom.audit.log'))
+  writeFileSync(path, `${hashedHubYaml({ port: 9, users: { alice: 'secret' } })}auditLog: ""\n`, { mode: 0o600 })
+  assert.throws(() => loadHubConfig(path), /auditLog/)
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('login audit lines are JSONL without secrets and drop invalid usernames', () => {
+  assert.equal(auditUsername('alice'), 'alice')
+  assert.equal(auditUsername('alice\nbob'), undefined)
+  const line = formatLoginAuditLine({
+    event: 'login.ok',
+    ip: '203.0.113.9',
+    user: 'alice',
+    ts: '2026-08-16T00:00:00.000Z',
+  })
+  assert.equal(line, '{"ts":"2026-08-16T00:00:00.000Z","event":"login.ok","ip":"203.0.113.9","user":"alice"}\n')
 })
 
 test('username and sessionTtlSeconds are validated', () => {

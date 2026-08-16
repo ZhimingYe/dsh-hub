@@ -23,6 +23,7 @@ import {
   type RegisterOkPayload,
   type WsOpenPayload,
 } from './protocol.js'
+import { appendLoginAudit, auditUsername } from './audit.js'
 import { findUser, assertBindPolicy, type HubConfig, type HubUser } from './config.js'
 import { BCRYPT_ROUNDS, bcryptCost, dummyPasswordHash, verifySecret } from './hash.js'
 import {
@@ -240,6 +241,7 @@ export class HubServer {
     const password = params.get('password') ?? ''
     const key = clientKey(req, this.config.trustedProxies)
     if (this.loginFailures.limited(key)) {
+      this.auditLogin('login.limited', key)
       console.warn(`dsh-hub: login rate-limited from ${key}`)
       this.html(res, 429, loginPage(hubLangFromRequest(req), 'tooMany'))
       return
@@ -247,11 +249,13 @@ export class HubServer {
     const user = findUser(this.config, username)
     if (!this.passwordMatches(user, password)) {
       this.loginFailures.add(key)
+      this.auditLogin('login.fail', key, auditUsername(username))
       console.warn(`dsh-hub: login failed from ${key}`)
       this.html(res, 401, loginPage(hubLangFromRequest(req), 'badCredentials'))
       return
     }
-    console.log(`dsh-hub: login ok for ${user.username}`)
+    this.auditLogin('login.ok', key, user.username)
+    console.log(`dsh-hub: login ok for ${user.username} from ${key}`)
     const id = this.sessions.create(user.username)
     res.writeHead(302, {
       ...HUB_API_SECURITY_HEADERS,
@@ -563,6 +567,10 @@ export class HubServer {
   private json(res: ServerResponse, status: number, body: unknown): void {
     res.writeHead(status, { ...HUB_API_SECURITY_HEADERS, 'content-type': 'application/json; charset=utf-8' })
     res.end(JSON.stringify(body))
+  }
+
+  private auditLogin(event: 'login.ok' | 'login.fail' | 'login.limited', ip: string, user?: string): void {
+    appendLoginAudit(this.config.auditLogPath, { event, ip, ...user !== undefined ? { user } : {} })
   }
 
   /** bcrypt-verify against the user hash or a dummy hash so a missing username is not a fast reject. */
