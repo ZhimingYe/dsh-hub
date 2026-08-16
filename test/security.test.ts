@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -101,6 +101,7 @@ test('a takeover agent keeps its reconnect token when the replaced agent drops',
 
 test('login audit records success and failure, ignoring spoofed X-Forwarded-For', async () => {
   const auditPath = join(dir, AUDIT_LOG_BASENAME)
+  const before = existsSync(auditPath) ? readFileSync(auditPath, 'utf8').trim().split('\n').filter(line => line.length > 0) : []
   const failed = await fetch(`${origin}/login`, {
     method: 'POST',
     headers: {
@@ -121,11 +122,10 @@ test('login audit records success and failure, ignoring spoofed X-Forwarded-For'
     redirect: 'manual',
   })
   assert.equal(ok.status, 302)
-  const lines = readFileSync(auditPath, 'utf8').trim().split('\n').map(line => JSON.parse(line) as {
-    event: string
-    ip: string
-    user?: string
-  })
+  const lines = readFileSync(auditPath, 'utf8').trim().split('\n')
+    .filter(line => line.length > 0)
+    .slice(before.length)
+    .map(line => JSON.parse(line) as { event: string; ip: string; user?: string })
   const fail = lines.find(line => line.event === 'login.fail')
   const success = lines.find(line => line.event === 'login.ok')
   assert.ok(fail)

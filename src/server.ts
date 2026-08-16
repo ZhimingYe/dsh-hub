@@ -241,7 +241,6 @@ export class HubServer {
     const password = params.get('password') ?? ''
     const key = clientKey(req, this.config.trustedProxies)
     if (this.loginFailures.limited(key)) {
-      this.auditLogin('login.limited', key)
       console.warn(`dsh-hub: login rate-limited from ${key}`)
       this.html(res, 429, loginPage(hubLangFromRequest(req), 'tooMany'))
       return
@@ -569,7 +568,7 @@ export class HubServer {
     res.end(JSON.stringify(body))
   }
 
-  private auditLogin(event: 'login.ok' | 'login.fail' | 'login.limited', ip: string, user?: string): void {
+  private auditLogin(event: 'login.ok' | 'login.fail', ip: string, user?: string): void {
     appendLoginAudit(this.config.auditLogPath, { event, ip, ...user !== undefined ? { user } : {} })
   }
 

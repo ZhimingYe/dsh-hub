@@ -96,7 +96,7 @@ users:
 | `allowPlainHttp` | `false` | Non-loopback cleartext HTTP is allowed only when `true` |
 | `trustedProxies` | `[]` | Reverse-proxy IPs allowed to supply `X-Forwarded-For` / `X-Forwarded-Proto`; an empty list ignores those headers. Each entry must be an IPv4 or IPv6 address. Behind Caddy, list `127.0.0.1` so login audit records the browser IP |
 | `sessionTtlSeconds` | `604800` | Browser session lifetime (60–2592000). A new login evicts that user's oldest session after 32 live sessions |
-| `auditLog` | `hub.audit.log` next to `hub.yaml` | Login-audit JSONL (`login.ok` / `login.fail` / `login.limited`). Created at mode `0600`. A relative path is resolved from the config directory |
+| `auditLog` | `hub.audit.log` next to `hub.yaml` | Login-audit JSONL (`login.ok` / `login.fail`). Created at mode `0600`; an existing target must be a regular file (not a symlink). A relative path is resolved from the config directory |
 | `users` | required | Login usernames (`[A-Za-z0-9._-]{1,64}`) to bcrypt hashes |
 
 Restart `serve` after editing the config. Do not put plaintext passwords or secrets in the yaml; a value that is not a bcrypt hash fails at load. To add a user:
@@ -271,7 +271,7 @@ users:
 
 After `trustedProxies` lists the reverse proxy's TCP address, Hub reads `X-Forwarded-For` (rightmost hop) and `X-Forwarded-Proto` (rightmost hop, for `Secure` cookies). Those headers are ignored when the list is empty, so a client cannot spoof them to bypass login / `/agent` rate limits. `hub.yaml` must be a regular file that is not group- or world-readable (mode `0600`).
 
-Each login writes one JSON line to `auditLog` (default `hub.audit.log` beside `hub.yaml`): `login.ok` includes the username and client IP; `login.fail` includes the presented username when it is a valid login name; `login.limited` is IP only. Behind Caddy, list `127.0.0.1` in `trustedProxies` so the IP is the rightmost `X-Forwarded-For` hop Caddy observed, not `127.0.0.1`. Caddy's default `reverse_proxy` appends the client address; Hub uses that last hop.
+Each login appends one JSON line to `auditLog` (default `hub.audit.log` beside `hub.yaml`): `login.ok` includes the username and client IP; `login.fail` includes the presented username when it is a valid login name. Rate-limited attempts are logged to the console only, so a flood of 429s cannot grow the audit file. Behind Caddy, list `127.0.0.1` in `trustedProxies` so the IP is the rightmost `X-Forwarded-For` hop Caddy observed, not `127.0.0.1`. Caddy's default `reverse_proxy` appends the client address; Hub uses that last hop.
 
 Caddyfile:
 

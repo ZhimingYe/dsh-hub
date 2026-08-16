@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { chmodSync, mkdirSync, writeFileSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync } from 'node:fs'
+import { chmodSync, mkdirSync, writeFileSync, mkdtempSync, realpathSync, readFileSync, rmSync, statSync, symlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { agentUrlFromHub, requireSecureHubUrl } from '../src/paths.ts'
@@ -8,7 +8,7 @@ import { headersForBrowser } from '../src/headers.ts'
 import { ensurePrivateDirectory } from '../webserver-unix/src/private-dir.js'
 import { parseHubLang, safeNextPath } from '../src/locale.ts'
 import { AUDIT_LOG_BASENAME, assertBindPolicy, assertUsername, loadHubConfig, renderHubConfig, writeNewHubConfig } from '../src/config.ts'
-import { auditUsername, formatLoginAuditLine } from '../src/audit.ts'
+import { auditUsername, appendLoginAudit, formatLoginAuditLine } from '../src/audit.ts'
 import { isBcryptHash, verifySecret } from '../src/hash.ts'
 import { hashedHubYaml, writeHashedHubYaml, TEST_AGENT_SECRET } from './hashed-yaml.ts'
 import { composeDshArgv, isDshOneShot, parseConnectArgs } from '../src/connect-args.ts'
@@ -217,6 +217,28 @@ test('login audit lines are JSONL without secrets and drop invalid usernames', (
     ts: '2026-08-16T00:00:00.000Z',
   })
   assert.equal(line, '{"ts":"2026-08-16T00:00:00.000Z","event":"login.ok","ip":"203.0.113.9","user":"alice"}\n')
+})
+
+test('appendLoginAudit refuses a symlink or directory target', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-hub-auditfile-'))
+  const target = join(root, 'target.log')
+  const link = join(root, 'link.log')
+  const dirPath = join(root, 'dir.log')
+  const record = { event: 'login.ok' as const, ip: '203.0.113.9', user: 'alice' }
+  writeFileSync(target, 'owned\n', { mode: 0o600 })
+  symlinkSync(target, link)
+  appendLoginAudit(link, record)
+  assert.equal(readFileSync(target, 'utf8'), 'owned\n')
+  mkdirSync(dirPath)
+  appendLoginAudit(dirPath, record)
+  assert.equal(readFileSync(target, 'utf8'), 'owned\n')
+  const fresh = join(root, 'fresh.log')
+  appendLoginAudit(fresh, record)
+  const parsed = JSON.parse(readFileSync(fresh, 'utf8')) as { event: string; ip: string; user?: string }
+  assert.equal(parsed.event, 'login.ok')
+  assert.equal(parsed.ip, '203.0.113.9')
+  assert.equal(parsed.user, 'alice')
+  rmSync(root, { recursive: true, force: true })
 })
 
 test('username and sessionTtlSeconds are validated', () => {

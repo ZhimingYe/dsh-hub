@@ -96,7 +96,7 @@ users:
 | `allowPlainHttp` | `false` | 为 `true` 时才允许非回环明文 HTTP |
 | `trustedProxies` | `[]` | 允许提供 `X-Forwarded-For` / `X-Forwarded-Proto` 的反代 IP；空列表表示忽略这些头。每项必须是 IPv4 或 IPv6 地址。Caddy 后面要写 `127.0.0.1`，登录审计才会记下浏览器 IP |
 | `sessionTtlSeconds` | `604800` | 浏览器会话寿命（60–2592000）。同一用户超过 32 个未过期会话时，新登录会挤掉最旧的一个 |
-| `auditLog` | `hub.yaml` 同目录的 `hub.audit.log` | 登录审计 JSONL（`login.ok` / `login.fail` / `login.limited`）。不存在时按权限 `0600` 创建。相对路径相对配置文件目录解析 |
+| `auditLog` | `hub.yaml` 同目录的 `hub.audit.log` | 登录审计 JSONL（`login.ok` / `login.fail`）。不存在时按权限 `0600` 创建；已存在的目标必须是普通文件（不能是符号链接）。相对路径相对配置文件目录解析 |
 | `users` | 必填 | 登录用户名（`[A-Za-z0-9._-]{1,64}`）到 bcrypt 哈希 |
 
 改完配置后重新执行 `serve`。明文口令和密钥不能写进 yaml；不是 bcrypt 哈希会在加载时失败。加用户：
@@ -271,7 +271,7 @@ users:
 
 `trustedProxies` 列出反代的 TCP 地址之后，Hub 才读取 `X-Forwarded-For`（取最右侧一跳）和 `X-Forwarded-Proto`（取最右侧一跳，用于 `Secure` cookie）。未列出时忽略这些头，避免客户端伪造以绕过登录/`/agent` 限速。`hub.yaml` 必须是普通文件且组/其他人不可读（权限 `0600`）。
 
-每次登录会往 `auditLog`（默认是 `hub.yaml` 旁边的 `hub.audit.log`）追加一行 JSON：`login.ok` 带用户名和客户端 IP；`login.fail` 在所提交用户名合法时记下该名；`login.limited` 只记 IP。在 Caddy 后面要把 `127.0.0.1` 写入 `trustedProxies`，审计 IP 才是 Caddy 看到的 `X-Forwarded-For` 最右一跳，而不是 `127.0.0.1`。Caddy 默认的 `reverse_proxy` 会追加客户端地址；Hub 取这一跳。
+每次登录会往 `auditLog`（默认是 `hub.yaml` 旁边的 `hub.audit.log`）追加一行 JSON：`login.ok` 带用户名和客户端 IP；`login.fail` 在所提交用户名合法时记下该名。被限速的尝试只进控制台日志，避免 429 洪水撑大审计文件。在 Caddy 后面要把 `127.0.0.1` 写入 `trustedProxies`，审计 IP 才是 Caddy 看到的 `X-Forwarded-For` 最右一跳，而不是 `127.0.0.1`。Caddy 默认的 `reverse_proxy` 会追加客户端地址；Hub 取这一跳。
 
 Caddyfile：
 

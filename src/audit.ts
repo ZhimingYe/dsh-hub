@@ -1,7 +1,7 @@
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, lstatSync } from 'node:fs'
 import { USERNAME_PATTERN } from './config.js'
 
-export type LoginAuditEvent = 'login.ok' | 'login.fail' | 'login.limited'
+export type LoginAuditEvent = 'login.ok' | 'login.fail'
 
 export interface LoginAuditRecord {
   ts: string
@@ -42,7 +42,9 @@ export function formatLoginAuditLine(record: {
 
 /**
  * Append one login-audit line. A write failure is reported and swallowed so
- * a full disk cannot block login.
+ * a full disk cannot block login. The destination must not be a symlink or a
+ * non-regular file, so a pre-seeded `auditLog` path cannot redirect the
+ * append or widen the log's permissions.
  * @param path - destination file; created at mode `0600` if missing.
  * @param record - event, client IP, and optional login name.
  */
@@ -51,6 +53,15 @@ export function appendLoginAudit(
   record: { event: LoginAuditEvent; ip: string; user?: string },
 ): void {
   try {
+    try {
+      const info = lstatSync(path)
+      if (info.isSymbolicLink() || !info.isFile()) {
+        console.error(`dsh-hub: audit log ${path} is not a regular file; refusing to append`)
+        return
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
     appendFileSync(path, formatLoginAuditLine(record), { encoding: 'utf8', mode: 0o600 })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
