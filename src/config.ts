@@ -38,6 +38,8 @@ export interface HubConfig {
   allowPlainHttp: boolean
   /** TCP peers allowed to supply `X-Forwarded-For` / `X-Forwarded-Proto`. Empty means ignore those headers. */
   trustedProxies: string[]
+  /** When false, login/logout and browser WebSocket upgrades skip the same-origin check. */
+  csrfProtection: boolean
   /** Absolute path of the login-audit JSONL file. */
   auditLogPath: string
 }
@@ -50,6 +52,7 @@ interface RawConfig {
   agentSecret?: string
   allowPlainHttp?: boolean
   trustedProxies?: unknown
+  csrfProtection?: unknown
   auditLog?: unknown
 }
 
@@ -97,6 +100,7 @@ export function loadHubConfig(path: string): HubConfig {
     agentSecretHash: raw.agentSecret,
     allowPlainHttp,
     trustedProxies: parseTrustedProxies(raw.trustedProxies),
+    csrfProtection: parseCsrfProtection(raw.csrfProtection),
     auditLogPath: parseAuditLogPath(dirname(resolved), raw.auditLog),
   }
 }
@@ -169,6 +173,12 @@ function parseSessionTtl(raw: unknown): number {
       `sessionTtlSeconds must be an integer from ${String(SESSION_TTL_MIN_SECONDS)} to ${String(SESSION_TTL_MAX_SECONDS)}`,
     )
   }
+  return raw
+}
+
+function parseCsrfProtection(raw: unknown): boolean {
+  if (raw === undefined) return true
+  if (typeof raw !== 'boolean') throw new Error('csrfProtection must be a boolean')
   return raw
 }
 

@@ -174,7 +174,7 @@ export class HubServer {
         return
       }
       if (req.method === 'POST' && url.pathname === '/login') {
-        if (!isSameOriginRequest(req)) {
+        if (this.config.csrfProtection && !isSameOriginRequest(req)) {
           this.json(res, 403, { error: 'forbidden' })
           return
         }
@@ -182,7 +182,7 @@ export class HubServer {
         return
       }
       if ((req.method === 'GET' || req.method === 'POST') && url.pathname === '/logout') {
-        if (!isSameOriginRequest(req)) {
+        if (this.config.csrfProtection && !isSameOriginRequest(req)) {
           this.json(res, 403, { error: 'forbidden' })
           return
         }
@@ -297,7 +297,7 @@ export class HubServer {
         socket.destroy()
         return
       }
-      if (!isSameOriginRequest(req)) {
+      if (this.config.csrfProtection && !isSameOriginRequest(req)) {
         socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n')
         socket.destroy()
         return
@@ -599,15 +599,19 @@ async function readBody(req: IncomingMessage, maxBytes: number): Promise<Buffer>
 }
 
 /**
- * Whether a state-changing request is same-origin. Rejects browser cross-site
- * form posts (login/logout CSRF): `Sec-Fetch-Site` is browser-controlled, and
- * an `Origin` hostname that differs from the request `Host` is a different
- * origin. Requests without an Origin header (direct navigation, non-browser
- * clients) pass.
+ * Whether a state-changing request is same-origin. Modern browsers send
+ * `Sec-Fetch-Site` on every request and a reverse proxy never rewrites it, so
+ * the check trusts that label and does not read `Host` (a proxy may rewrite
+ * `Host` without making the request cross-site). When `Sec-Fetch-Site` is
+ * absent (older browsers, non-browser clients) the `Origin` hostname must
+ * match the request `Host`. Requests without an Origin header (direct
+ * navigation, non-browser clients) pass.
  */
 function isSameOriginRequest(req: IncomingMessage): boolean {
   const site = req.headers['sec-fetch-site']
-  if (typeof site === 'string' && site !== 'same-origin' && site !== 'none') return false
+  if (typeof site === 'string') {
+    return site === 'same-origin' || site === 'none'
+  }
   const header = req.headers.origin
   if (typeof header !== 'string' || header.length === 0) return true
   if (header === 'null') return false

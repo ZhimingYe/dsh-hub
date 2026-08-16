@@ -1,6 +1,6 @@
 {
   "name": "dsh-hub",
-  "version": "0.2.3",
+  "version": "0.2.5",
   "private": true,
   "type": "module",
   "description": "Public Hub + HPC Agent for DeepSeek Harness. Does not modify upstream dsh packages.",

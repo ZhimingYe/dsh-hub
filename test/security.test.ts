@@ -285,6 +285,50 @@ test('same-site and null-origin login POSTs are rejected', async () => {
   assert.equal(nullOrigin.status, 403)
 })
 
+test('modern-browser login passes even when a proxy rewrites Host', async () => {
+  const body = 'username=alice&password=alice-secret'
+  const status = await rawRequestStatus([
+    'POST /login HTTP/1.1',
+    `Host: 127.0.0.1:${String(port)}`,
+    'Origin: https://203.0.113.50:8443',
+    'Sec-Fetch-Site: same-origin',
+    'Content-Type: application/x-www-form-urlencoded',
+    `Content-Length: ${String(body.length)}`,
+    '',
+    body,
+  ])
+  assert.equal(status, 302)
+})
+
+test('csrfProtection: false accepts a cross-site login POST', async () => {
+  const offDir = mkdtempSync(join(tmpdir(), 'dsh-hub-csrfoff-'))
+  const offConfig = join(offDir, 'hub.yaml')
+  writeHashedHubYaml(offConfig, {
+    host: '127.0.0.1',
+    port: 0,
+    users: { alice: 'alice-secret' },
+    extra: 'csrfProtection: false',
+  })
+  const offHub = new HubServer({ config: loadHubConfig(offConfig) })
+  const offPort = await offHub.listen()
+  try {
+    const response = await fetch(`http://127.0.0.1:${String(offPort)}/login`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        origin: 'https://evil.example',
+        'sec-fetch-site': 'cross-site',
+      },
+      body: 'username=alice&password=alice-secret',
+      redirect: 'manual',
+    })
+    assert.equal(response.status, 302)
+  } finally {
+    await offHub.close()
+    rmSync(offDir, { recursive: true, force: true })
+  }
+})
+
 test('same-origin login POST still works', async () => {
   const response = await fetch(`${origin}/login`, {
     method: 'POST',

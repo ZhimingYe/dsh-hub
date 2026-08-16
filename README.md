@@ -97,6 +97,7 @@ users:
 | `trustedProxies` | `[]` | Reverse-proxy IPs allowed to supply `X-Forwarded-For` / `X-Forwarded-Proto`; an empty list ignores those headers. Each entry must be an IPv4 or IPv6 address. Behind Caddy, list `127.0.0.1` so login audit records the browser IP |
 | `sessionTtlSeconds` | `604800` | Browser session lifetime (60–2592000). A new login evicts that user's oldest session after 32 live sessions |
 | `auditLog` | `hub.audit.log` next to `hub.yaml` | Login-audit JSONL (`login.ok` / `login.fail`). Created at mode `0600`; an existing target must be a regular file (not a symlink). A relative path is resolved from the config directory |
+| `csrfProtection` | `true` | Same-origin check on login/logout and browser WebSocket upgrades. Modern browsers are judged by `Sec-Fetch-Site` only, never by the proxy's `Host`, so a reverse proxy cannot break logins. Set `false` to disable the check entirely |
 | `users` | required | Login usernames (`[A-Za-z0-9._-]{1,64}`) to bcrypt hashes |
 
 Restart `serve` after editing the config. Do not put plaintext passwords or secrets in the yaml; a value that is not a bcrypt hash fails at load. To add a user:
@@ -342,6 +343,7 @@ npm test
 | Loading `hub.yaml` complains about bcrypt | The field must be a hash from `dsh-hub hash` or first `serve`, not plaintext |
 | Loading `hub.yaml` complains about mode, username, or `sessionTtlSeconds` | The file must be a real file (not a symlink) that is not group- or world-readable (mode `0600`); usernames are `[A-Za-z0-9._-]{1,64}`; `sessionTtlSeconds` must be an integer from 60 to 2592000 |
 | Login audit IPs are all `127.0.0.1` | Hub is behind a reverse proxy and `trustedProxies` is empty. List the proxy TCP address (Caddy on the same host: `127.0.0.1`) |
+| Correct password returns `{"error":"forbidden"}` on Hub 0.2.2–0.2.3 | Those versions compared `Origin` to the proxy's `Host`; a proxy that rewrites `Host` broke logins. Upgrade to 0.2.5 (login checks use `Sec-Fetch-Site`, never `Host`) or set `csrfProtection: false` |
 | Signed in but always offline | `connect` is not running, the username does not match `hub.yaml`, the Unix-like machine cannot reach Hub, or the agent secret is not the `DSH_HUB_AGENT_SECRET` from first `serve` |
 | Lost `DSH_HUB_AGENT_SECRET` | The yaml cannot recover the plaintext. `dsh-hub hash` a new `agentSecret` and update the Unix-like machine |
 | Password file error | Mode must be `0600`; others must not be able to read it |

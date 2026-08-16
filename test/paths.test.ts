@@ -241,6 +241,18 @@ test('appendLoginAudit refuses a symlink or directory target', () => {
   rmSync(root, { recursive: true, force: true })
 })
 
+test('csrfProtection defaults to true and parses a boolean', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-hub-csrf-'))
+  const path = join(dir, 'hub.yaml')
+  writeHashedHubYaml(path, { port: 9, users: { alice: 'secret' } })
+  assert.equal(loadHubConfig(path).csrfProtection, true)
+  writeHashedHubYaml(path, { port: 9, users: { alice: 'secret' }, extra: 'csrfProtection: false' })
+  assert.equal(loadHubConfig(path).csrfProtection, false)
+  writeFileSync(path, `${hashedHubYaml({ port: 9, users: { alice: 'secret' } })}csrfProtection: maybe\n`, { mode: 0o600 })
+  assert.throws(() => loadHubConfig(path), /csrfProtection/)
+  rmSync(dir, { recursive: true, force: true })
+})
+
 test('username and sessionTtlSeconds are validated', () => {
   assert.throws(() => assertUsername('alice: admin'), /username/)
   assert.throws(() => assertUsername('alice\nbob'), /username/)
