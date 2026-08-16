@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import net from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, test } from 'node:test'
@@ -123,6 +124,149 @@ test('login ignores spoofed X-Forwarded-Proto when trustedProxies is empty', asy
   const setCookie = response.headers.get('set-cookie') ?? ''
   assert.doesNotMatch(setCookie, /Secure/)
 })
+
+test('malformed cookie percent-encoding on upgrade is 401, not a crash', async () => {
+  const status = await rawRequestStatus([
+    'GET /api/events.mux HTTP/1.1',
+    'Host: 127.0.0.1',
+    'Upgrade: websocket',
+    'Connection: Upgrade',
+    'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
+    'Sec-WebSocket-Version: 13',
+    'Cookie: dsh_hub_session=%zz',
+  ])
+  assert.equal(status, 401)
+  const health = await fetch(`${origin}/hub/health`)
+  assert.equal(health.status, 200)
+})
+
+test('invalid absolute-form request target on upgrade is 400, not a crash', async () => {
+  const status = await rawRequestStatus([
+    'GET http://evil.example:99999/ HTTP/1.1',
+    'Host: evil.example',
+    'Upgrade: websocket',
+    'Connection: Upgrade',
+    'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
+    'Sec-WebSocket-Version: 13',
+  ])
+  assert.equal(status, 400)
+  const health = await fetch(`${origin}/hub/health`)
+  assert.equal(health.status, 200)
+})
+
+test('cross-site login POST is rejected', async () => {
+  const response = await fetch(`${origin}/login`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded',
+      'origin': 'https://evil.example',
+      'sec-fetch-site': 'cross-site',
+    },
+    body: 'username=alice&password=alice-secret',
+    redirect: 'manual',
+  })
+  assert.equal(response.status, 403)
+})
+
+test('same-site and null-origin login POSTs are rejected', async () => {
+  const sameSite = await fetch(`${origin}/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', 'sec-fetch-site': 'same-site' },
+    body: 'username=alice&password=alice-secret',
+    redirect: 'manual',
+  })
+  assert.equal(sameSite.status, 403)
+  const nullOrigin = await fetch(`${origin}/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', 'origin': 'null' },
+    body: 'username=alice&password=alice-secret',
+    redirect: 'manual',
+  })
+  assert.equal(nullOrigin.status, 403)
+})
+
+test('same-origin login POST still works', async () => {
+  const response = await fetch(`${origin}/login`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded',
+      'origin': origin,
+    },
+    body: 'username=alice&password=alice-secret',
+    redirect: 'manual',
+  })
+  assert.equal(response.status, 302)
+})
+
+test('same-origin login with a default-port Host is accepted', async () => {
+  const body = 'username=alice&password=alice-secret'
+  const status = await rawRequestStatus([
+    'POST /login HTTP/1.1',
+    'Host: 127.0.0.1:80',
+    'Origin: http://127.0.0.1',
+    'Content-Type: application/x-www-form-urlencoded',
+    `Content-Length: ${String(body.length)}`,
+    '',
+    body,
+  ])
+  assert.equal(status, 302)
+})
+
+test('a Host port that differs from the Origin port is rejected', async () => {
+  const body = 'username=alice&password=alice-secret'
+  const status = await rawRequestStatus([
+    'POST /login HTTP/1.1',
+    `Host: 127.0.0.1:${String(port)}`,
+    'Origin: http://127.0.0.1:9999',
+    'Content-Type: application/x-www-form-urlencoded',
+    `Content-Length: ${String(body.length)}`,
+    '',
+    body,
+  ])
+  assert.equal(status, 403)
+})
+
+test('cross-site logout is rejected', async () => {
+  const viaSite = await fetch(`${origin}/logout`, {
+    method: 'GET',
+    headers: { 'sec-fetch-site': 'cross-site' },
+    redirect: 'manual',
+  })
+  assert.equal(viaSite.status, 403)
+  const viaOrigin = await fetch(`${origin}/logout`, {
+    method: 'POST',
+    headers: { 'origin': 'https://evil.example' },
+    redirect: 'manual',
+  })
+  assert.equal(viaOrigin.status, 403)
+})
+
+function rawRequestStatus(lines: string[]): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const socket = net.connect(port, '127.0.0.1')
+    socket.on('connect', () => {
+      socket.write(`${lines.join('\r\n')}\r\n\r\n`)
+    })
+    let data = ''
+    const timer = setTimeout(() => {
+      socket.destroy()
+      reject(new Error(`raw request timeout; got:\n${data}`))
+    }, 3000)
+    socket.on('data', (chunk) => {
+      data += chunk.toString('utf8')
+      const match = /^HTTP\/1\.1 (\d{3})/.exec(data)
+      if (match !== null) {
+        clearTimeout(timer)
+        socket.destroy()
+        resolve(Number(match[1]))
+      }
+    })
+    socket.on('error', (error) => {
+      clearTimeout(timer)
+      reject(error)
+    })
+  })
+}
 
 function upgradeStatus(url: string, authorization?: string): Promise<number> {
   return new Promise((resolve, reject) => {

@@ -239,37 +239,43 @@ export class HubAgent {
       console.error(`bad frame: ${error instanceof Error ? error.message : String(error)}`)
       return
     }
-    switch (frame.type) {
-      case FrameType.RegisterOk:
-        console.log(`connected as ${this.options.username}`)
-        return
-      case FrameType.RegisterErr:
-        console.error(`register rejected: ${frame.payload.toString('utf8')}`)
-        this.ws?.close(4006, 'register rejected')
-        return
-      case FrameType.Heartbeat:
-        return
-      case FrameType.HttpOpen:
-        this.onHttpOpen(frame)
-        return
-      case FrameType.HttpData:
-        this.httpStreams.get(frame.streamId)?.write(frame.payload)
-        return
-      case FrameType.HttpEnd:
-        this.httpStreams.get(frame.streamId)?.end()
-        return
-      case FrameType.WsOpen:
-        this.onWsOpen(frame)
-        return
-      case FrameType.WsData:
-        this.onWsData(frame)
-        return
-      case FrameType.WsClose:
-      case FrameType.Abort:
-        this.abortStream(frame.streamId)
-        return
-      default:
-        return
+    try {
+      switch (frame.type) {
+        case FrameType.RegisterOk:
+          console.log(`connected as ${this.options.username}`)
+          return
+        case FrameType.RegisterErr:
+          console.error(`register rejected: ${frame.payload.toString('utf8')}`)
+          this.ws?.close(4006, 'register rejected')
+          return
+        case FrameType.Heartbeat:
+          return
+        case FrameType.HttpOpen:
+          this.onHttpOpen(frame)
+          return
+        case FrameType.HttpData:
+          this.httpStreams.get(frame.streamId)?.write(frame.payload)
+          return
+        case FrameType.HttpEnd:
+          this.httpStreams.get(frame.streamId)?.end()
+          return
+        case FrameType.WsOpen:
+          this.onWsOpen(frame)
+          return
+        case FrameType.WsData:
+          this.onWsData(frame)
+          return
+        case FrameType.WsClose:
+        case FrameType.Abort:
+          this.abortStream(frame.streamId)
+          return
+        default:
+          return
+      }
+    } catch (error) {
+      // a malformed stream frame must not take down the whole agent
+      console.error(`frame error: ${error instanceof Error ? error.message : String(error)}`)
+      this.abortStream(frame.streamId)
     }
   }
 
@@ -299,7 +305,6 @@ export class HubAgent {
       this.send(FrameType.HttpRespEnd, frame.streamId)
     })
     this.httpStreams.set(frame.streamId, req)
-    if (open.method === 'GET' || open.method === 'HEAD') req.end()
   }
 
   private pipeHttpResponse(streamId: number, res: IncomingMessage): void {
@@ -331,10 +336,19 @@ export class HubAgent {
       return
     }
     const pathname = open.url
-    const target = new WebSocket(`ws://127.0.0.1${pathname}`, {
-      agent: new HttpAgent({ socketPath: this.options.socketPath } as ConstructorParameters<typeof HttpAgent>[0]),
-      headers: { host: '127.0.0.1' },
-    })
+    let target: WebSocket
+    try {
+      const parsed = new URL(`ws://127.0.0.1${pathname}`)
+      if (!isLoopbackHostname(parsed.hostname)) throw new Error('non-loopback ws target')
+      target = new WebSocket(parsed.href, {
+        agent: new HttpAgent({ socketPath: this.options.socketPath } as ConstructorParameters<typeof HttpAgent>[0]),
+        headers: { host: '127.0.0.1' },
+      })
+    } catch (error) {
+      console.error(`invalid ws target: ${error instanceof Error ? error.message : String(error)}`)
+      this.sendJson(FrameType.WsOpenErr, frame.streamId, { error: 'invalid ws url' })
+      return
+    }
     this.wsStreams.set(frame.streamId, target)
     target.on('open', () => { this.sendJson(FrameType.WsOpenOk, frame.streamId, { ok: true }) })
     target.on('message', (raw, isBinary) => {

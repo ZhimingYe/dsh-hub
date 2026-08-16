@@ -166,10 +166,18 @@ export class HubServer {
         return
       }
       if (req.method === 'POST' && url.pathname === '/login') {
+        if (!isSameOriginRequest(req)) {
+          this.json(res, 403, { error: 'forbidden' })
+          return
+        }
         await this.handleLogin(req, res)
         return
       }
       if ((req.method === 'GET' || req.method === 'POST') && url.pathname === '/logout') {
+        if (!isSameOriginRequest(req)) {
+          this.json(res, 403, { error: 'forbidden' })
+          return
+        }
         this.sessions.revoke(sessionIdFromRequest(req))
         res.writeHead(302, {
           location: '/login',
@@ -205,7 +213,7 @@ export class HubServer {
         this.html(res, 503, offlinePage(hubLangFromRequest(req), username))
         return
       }
-      await this.tunnelHttp(username, req, res)
+      await this.tunnelHttp(username, req, res, url)
     } catch (error) {
       console.error(error instanceof Error ? error : new Error(String(error)))
       if (!res.headersSent) {
@@ -246,37 +254,54 @@ export class HubServer {
   }
 
   private handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
-    const url = new URL(req.url ?? '/', 'http://hub.local')
-    if (url.pathname === '/agent') {
-      const key = clientKey(req, this.config.trustedProxies)
-      if (this.registerFailures.limited(key)) {
-        socket.write('HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\n\r\n')
-        socket.destroy()
+    let upgraded = false
+    try {
+      const url = new URL(req.url ?? '/', 'http://hub.local')
+      if (url.pathname === '/agent') {
+        const key = clientKey(req, this.config.trustedProxies)
+        if (this.registerFailures.limited(key)) {
+          socket.write('HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\n\r\n')
+          socket.destroy()
+          return
+        }
+        if (!this.agentSecretOk(req)) {
+          this.registerFailures.add(key)
+          socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
+          socket.destroy()
+          return
+        }
+        this.wss.handleUpgrade(req, socket, head, ws => {
+          upgraded = true
+          this.onAgentSocket(req, ws)
+        })
         return
       }
-      if (!this.agentSecretOk(req)) {
-        this.registerFailures.add(key)
+      const username = this.userFromRequest(req)
+      if (username === undefined) {
         socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
         socket.destroy()
         return
       }
-      this.wss.handleUpgrade(req, socket, head, ws => { this.onAgentSocket(req, ws) })
-      return
-    }
-    const username = this.userFromRequest(req)
-    if (username === undefined) {
-      socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
+      if (!this.agentOnline(username)) {
+        socket.write('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n')
+        socket.destroy()
+        return
+      }
+      this.wss.handleUpgrade(req, socket, head, ws => {
+        upgraded = true
+        void this.tunnelBrowserSocket(username, req, ws, url).catch(error => {
+          console.error(error instanceof Error ? error : new Error(String(error)))
+          ws.close(1011, 'tunnel setup failed')
+        })
+      })
+    } catch (error) {
+      console.error(error instanceof Error ? error : new Error(String(error)))
+      // after a completed handshake the socket carries WebSocket frames, not HTTP
+      if (!upgraded && !socket.destroyed) {
+        socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n')
+      }
       socket.destroy()
-      return
     }
-    if (!this.agentOnline(username)) {
-      socket.write('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n')
-      socket.destroy()
-      return
-    }
-    this.wss.handleUpgrade(req, socket, head, ws => {
-      void this.tunnelBrowserSocket(username, req, ws)
-    })
   }
 
   private onAgentSocket(req: IncomingMessage, ws: WebSocket): void {
@@ -435,7 +460,7 @@ export class HubServer {
     }
   }
 
-  private async tunnelHttp(username: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  private async tunnelHttp(username: string, req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     const link = this.agentsByUser.get(username)
     if (link === undefined) {
       this.html(res, 503, offlinePage(hubLangFromRequest(req), username))
@@ -445,7 +470,7 @@ export class HubServer {
     link.streams.set(streamId, { kind: 'http', res })
     const open: HttpOpenPayload = {
       method: req.method ?? 'GET',
-      url: req.url ?? '/',
+      url: url.pathname + url.search,
       headers: incomingToPairs(req.headers),
     }
     sendJson(link.ws, FrameType.HttpOpen, streamId, open)
@@ -467,7 +492,7 @@ export class HubServer {
     else req.resume()
   }
 
-  private async tunnelBrowserSocket(username: string, req: IncomingMessage, client: WebSocket): Promise<void> {
+  private async tunnelBrowserSocket(username: string, req: IncomingMessage, client: WebSocket, url: URL): Promise<void> {
     const link = this.agentsByUser.get(username)
     if (link === undefined) {
       client.close(1011, 'agent offline')
@@ -476,7 +501,7 @@ export class HubServer {
     const streamId = link.nextStreamId++
     link.streams.set(streamId, { kind: 'ws', client })
     const open: WsOpenPayload = {
-      url: req.url ?? '/',
+      url: url.pathname + url.search,
       headers: incomingToPairs(req.headers),
     }
     sendJson(link.ws, FrameType.WsOpen, streamId, open)
@@ -538,6 +563,43 @@ async function readBody(req: IncomingMessage, maxBytes: number): Promise<Buffer>
     chunks.push(buf)
   }
   return Buffer.concat(chunks)
+}
+
+/**
+ * Whether a state-changing request is same-origin. Rejects browser cross-site
+ * form posts (login/logout CSRF): `Sec-Fetch-Site` is browser-controlled, and
+ * an `Origin` hostname that differs from the request `Host` is a different
+ * origin. Requests without an Origin header (direct navigation, non-browser
+ * clients) pass.
+ */
+function isSameOriginRequest(req: IncomingMessage): boolean {
+  const site = req.headers['sec-fetch-site']
+  if (typeof site === 'string' && site !== 'same-origin' && site !== 'none') return false
+  const header = req.headers.origin
+  if (typeof header !== 'string' || header.length === 0) return true
+  if (header === 'null') return false
+  let origin: URL
+  try {
+    origin = new URL(header)
+  } catch {
+    // an unparseable Origin is never the Hub origin
+    return false
+  }
+  const host = req.headers.host
+  if (typeof host !== 'string' || host.length === 0) return false
+  let hostUrl: URL
+  try {
+    hostUrl = new URL(`http://${host.trim()}`)
+  } catch {
+    // an unparseable Host cannot prove the request is same-origin
+    return false
+  }
+  if (hostUrl.hostname.toLowerCase() !== origin.hostname.toLowerCase()) return false
+  // A proxy may drop the Host port; the hostname match already rules out
+  // cross-site origins, so a portless Host is accepted.
+  if (hostUrl.port === '') return true
+  const originPort = origin.port === '' ? (origin.protocol === 'https:' ? '443' : '80') : origin.port
+  return hostUrl.port === originPort
 }
 
 function randomToken(): string {

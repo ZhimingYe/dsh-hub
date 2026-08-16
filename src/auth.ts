@@ -130,9 +130,18 @@ export function parseCookies(header: string | undefined): Record<string, string>
     if (cut <= 0) continue
     const key = part.slice(0, cut).trim()
     const value = part.slice(cut + 1).trim()
-    out[key] = decodeURIComponent(value)
+    out[key] = decodeCookieValue(value)
   }
   return out
+}
+
+function decodeCookieValue(value: string): string {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    // malformed percent-encoding (e.g. "%zz") is not a value this server set
+    return value
+  }
 }
 
 export function sessionIdFromRequest(req: IncomingMessage): string | undefined {

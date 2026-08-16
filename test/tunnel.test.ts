@@ -1,5 +1,6 @@
 import { createServer } from 'node:http'
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import net from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, test } from 'node:test'
@@ -60,6 +61,7 @@ dsh.on('upgrade', (req, socket, head) => {
 })
 
 const hub = new HubServer({ config: loadHubConfig(configPath) })
+let port = 0
 let agent: HubAgent
 let origin = ''
 let cookie = ''
@@ -72,7 +74,7 @@ before(async () => {
     })
     dsh.once('error', reject)
   })
-  const port = await hub.listen()
+  port = await hub.listen()
   origin = `http://127.0.0.1:${String(port)}`
   agent = new HubAgent({
     hubUrl: `ws://127.0.0.1:${String(port)}/agent`,
@@ -139,30 +141,39 @@ test('POST bodies stream through the tunnel', async () => {
 
 test('browser websocket is relayed to DSH', async () => {
   const session = cookie.length > 0 ? cookie : await login('alice', 'alice-secret')
-  await new Promise<void>((resolve, reject) => {
-    const ws = new WebSocket(`${origin.replace('http', 'ws')}/api/events.mux`, {
-      headers: { cookie: session },
-      perMessageDeflate: false,
-    })
-    const timer = setTimeout(() => { reject(new Error(`reply timeout readyState=${String(ws.readyState)}`)) }, 3000)
-    const ping = (): void => {
-      if (ws.readyState === WebSocket.OPEN) ws.send('ping-mux')
-    }
-    ws.on('open', ping)
-    const interval = setInterval(ping, 50)
-    ws.on('message', (data) => {
-      clearTimeout(timer)
-      clearInterval(interval)
-      try {
-        assert.equal(String(data), 'ping-mux')
-        ws.close()
-        resolve()
-      } catch (error) {
-        reject(error)
-      }
-    })
-    ws.on('error', error => { clearTimeout(timer); clearInterval(interval); reject(error) })
-  })
+  await relayPing(session)
+})
+
+test('websocket target with a fragment is stripped and the agent survives', async () => {
+  const session = cookie.length > 0 ? cookie : await login('alice', 'alice-secret')
+  const status = await rawRequestStatus([
+    'GET /api/events.mux#frag HTTP/1.1',
+    `Host: 127.0.0.1:${String(port)}`,
+    'Upgrade: websocket',
+    'Connection: Upgrade',
+    'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
+    'Sec-WebSocket-Version: 13',
+    `Cookie: ${session}`,
+  ])
+  assert.equal(status, 101)
+  assert.equal(hub.agentOnline('alice'), true)
+  await relayPing(session)
+})
+
+test('GET with a body streams through the tunnel without breaking the agent', async () => {
+  const session = cookie.length > 0 ? cookie : await login('alice', 'alice-secret')
+  const status = await rawRequestStatus([
+    'GET /hello HTTP/1.1',
+    `Host: 127.0.0.1:${String(port)}`,
+    `Cookie: ${session}`,
+    'Content-Length: 18',
+    '',
+    'some-body-payload!',
+  ])
+  assert.equal(status, 200)
+  assert.equal(hub.agentOnline('alice'), true)
+  const after = await fetch(`${origin}/hello`, { headers: { cookie: session } })
+  assert.equal(await after.text(), 'from-dsh')
 })
 
 test('bob is authenticated but has no agent', async () => {
@@ -225,6 +236,60 @@ async function login(username: string, password: string): Promise<string> {
   const match = /dsh_hub_session=([^;]+)/.exec(setCookie)
   assert.ok(match)
   return `dsh_hub_session=${match[1]}`
+}
+
+async function relayPing(session: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const ws = new WebSocket(`${origin.replace('http', 'ws')}/api/events.mux`, {
+      headers: { cookie: session },
+      perMessageDeflate: false,
+    })
+    const timer = setTimeout(() => { reject(new Error(`reply timeout readyState=${String(ws.readyState)}`)) }, 3000)
+    const ping = (): void => {
+      if (ws.readyState === WebSocket.OPEN) ws.send('ping-mux')
+    }
+    ws.on('open', ping)
+    const interval = setInterval(ping, 50)
+    ws.on('message', (data) => {
+      clearTimeout(timer)
+      clearInterval(interval)
+      try {
+        assert.equal(String(data), 'ping-mux')
+        ws.close()
+        resolve()
+      } catch (error) {
+        reject(error)
+      }
+    })
+    ws.on('error', error => { clearTimeout(timer); clearInterval(interval); reject(error) })
+  })
+}
+
+function rawRequestStatus(lines: string[]): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const socket = net.connect(port, '127.0.0.1')
+    socket.on('connect', () => {
+      socket.write(`${lines.join('\r\n')}\r\n\r\n`)
+    })
+    let data = ''
+    const timer = setTimeout(() => {
+      socket.destroy()
+      reject(new Error(`raw request timeout; got:\n${data}`))
+    }, 3000)
+    socket.on('data', (chunk) => {
+      data += chunk.toString('utf8')
+      const match = /^HTTP\/1\.1 (\d{3})/.exec(data)
+      if (match !== null) {
+        clearTimeout(timer)
+        socket.destroy()
+        resolve(Number(match[1]))
+      }
+    })
+    socket.on('error', (error) => {
+      clearTimeout(timer)
+      reject(error)
+    })
+  })
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
