@@ -1,3 +1,4 @@
+import { writeFileSync } from 'node:fs'
 import { hashSecret } from '../src/hash.ts'
 
 export const TEST_AGENT_SECRET = 'test-agent-secret-1'
@@ -25,4 +26,16 @@ export function hashedHubYaml(options: {
     '',
   ]
   return lines.filter((line): line is string => line !== undefined).join('\n')
+}
+
+/**
+ * Write a test `hub.yaml` at mode `0600` so {@link loadHubConfig} accepts it.
+ * @param path - destination path.
+ * @param options - same as {@link hashedHubYaml}.
+ */
+export function writeHashedHubYaml(
+  path: string,
+  options: Parameters<typeof hashedHubYaml>[0],
+): void {
+  writeFileSync(path, hashedHubYaml(options), { mode: 0o600 })
 }

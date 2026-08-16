@@ -94,8 +94,9 @@ users:
 | `host` | `127.0.0.1` | 监听地址；公网用反代，不要把 Hub 直接绑到 `0.0.0.0` |
 | `agentSecret` | 必填 | `/agent` Bearer 密钥的 bcrypt 哈希；类 Unix 机器上的 `connect` 出示对应明文 |
 | `allowPlainHttp` | `false` | 为 `true` 时才允许非回环明文 HTTP |
-| `trustedProxies` | `[]` | 允许提供 `X-Forwarded-For` / `X-Forwarded-Proto` 的反代 IP；空列表表示忽略这些头 |
-| `users` | 必填 | 登录用户名到 bcrypt 哈希 |
+| `trustedProxies` | `[]` | 允许提供 `X-Forwarded-For` / `X-Forwarded-Proto` 的反代 IP；空列表表示忽略这些头。每项必须是 IPv4 或 IPv6 地址 |
+| `sessionTtlSeconds` | `604800` | 浏览器会话寿命（60–2592000）。同一用户超过 32 个未过期会话时，新登录会挤掉最旧的一个 |
+| `users` | 必填 | 登录用户名（`[A-Za-z0-9._-]{1,64}`）到 bcrypt 哈希 |
 
 改完配置后重新执行 `serve`。明文口令和密钥不能写进 yaml；不是 bcrypt 哈希会在加载时失败。加用户：
 
@@ -267,7 +268,7 @@ users:
   alice: "$2a$12$...."
 ```
 
-`trustedProxies` 列出反代的 TCP 地址之后，Hub 才读取 `X-Forwarded-For`（取最右侧一跳）和 `X-Forwarded-Proto`（用于 `Secure` cookie）。未列出时忽略这些头，避免客户端伪造以绕过登录/`/agent` 限速。
+`trustedProxies` 列出反代的 TCP 地址之后，Hub 才读取 `X-Forwarded-For`（取最右侧一跳）和 `X-Forwarded-Proto`（取最右侧一跳，用于 `Secure` cookie）。未列出时忽略这些头，避免客户端伪造以绕过登录/`/agent` 限速。`hub.yaml` 必须是普通文件且组/其他人不可读（权限 `0600`）。
 
 Caddyfile：
 
@@ -336,6 +337,7 @@ npm test
 | `dsh plugin` 提示找不到 pnpm | 把 `pnpm` 加入 PATH 后再装组合包 |
 | `工作站启动超时` | dsh 没起来，看同一终端的 stderr |
 | 加载 `hub.yaml` 报 bcrypt | 字段必须是 `dsh-hub hash` 或首次 `serve` 写出的哈希，不能写明文 |
+| 加载 `hub.yaml` 报权限 / 用户名 / `sessionTtlSeconds` | 文件必须是真实文件（非符号链接）且组/其他人不可读（权限 `0600`）；用户名须匹配 `[A-Za-z0-9._-]{1,64}`；`sessionTtlSeconds` 必须是 60–2592000 的整数 |
 | 登录后一直离线 | `connect` 没在跑、用户名和 `hub.yaml` 不一致、类 Unix 机器访问不到 Hub，或 Agent 密钥与首次 `serve` 打印的 `DSH_HUB_AGENT_SECRET` 不一致 |
 | 丢了 `DSH_HUB_AGENT_SECRET` | yaml 里还原不出明文。`dsh-hub hash` 写一个新 `agentSecret`，并更新类 Unix 机器 |
 | 密码文件报错 | 权限必须是 `0600`，不能被其他人读 |

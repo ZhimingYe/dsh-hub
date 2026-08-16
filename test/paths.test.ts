@@ -7,12 +7,13 @@ import { agentUrlFromHub, requireSecureHubUrl } from '../src/paths.ts'
 import { headersForBrowser } from '../src/headers.ts'
 import { ensurePrivateDirectory } from '../webserver-unix/src/private-dir.js'
 import { parseHubLang, safeNextPath } from '../src/locale.ts'
-import { assertBindPolicy, loadHubConfig, renderHubConfig, writeNewHubConfig } from '../src/config.ts'
+import { assertBindPolicy, assertUsername, loadHubConfig, renderHubConfig, writeNewHubConfig } from '../src/config.ts'
 import { isBcryptHash, verifySecret } from '../src/hash.ts'
-import { hashedHubYaml, TEST_AGENT_SECRET } from './hashed-yaml.ts'
+import { hashedHubYaml, writeHashedHubYaml, TEST_AGENT_SECRET } from './hashed-yaml.ts'
 import { composeDshArgv, isDshOneShot, parseConnectArgs } from '../src/connect-args.ts'
-import { FailureLimiter, clientKey, isForwardedHttps } from '../src/auth.ts'
+import { FailureLimiter, MAX_SESSIONS_PER_USER, SessionStore, clientKey, isForwardedHttps } from '../src/auth.ts'
 import { assertHubPluginsResolvable, ensureHubPluginLinks, hubPluginLinkRoots, hubPlugins } from '../src/setup-workstation.ts'
+import { readPasswordFile } from '../src/password.ts'
 
 test('portal address becomes the agent websocket url', () => {
   assert.equal(agentUrlFromHub('http://10.0.0.8:8787'), 'ws://10.0.0.8:8787/agent')
@@ -23,7 +24,7 @@ test('portal address becomes the agent websocket url', () => {
 test('config requires users and a bcrypt agentSecret', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-hub-cfg-'))
   const path = join(dir, 'hub.yaml')
-  writeFileSync(path, hashedHubYaml({ port: 9, users: { alice: 'secret' } }))
+  writeHashedHubYaml(path, { port: 9, users: { alice: 'secret' } })
   const config = loadHubConfig(path)
   assert.equal(config.users[0]?.username, 'alice')
   assert.equal(config.port, 9)
@@ -82,6 +83,14 @@ test('composeDshArgv injects workstation profile only when missing', () => {
   )
 })
 
+test('session store evicts the oldest session when a user exceeds the cap', () => {
+  const store = new SessionStore(60_000)
+  const ids: string[] = []
+  for (let i = 0; i < MAX_SESSIONS_PER_USER + 1; i += 1) ids.push(store.create('alice'))
+  assert.equal(store.get(ids[0]), undefined)
+  assert.ok(store.get(ids[ids.length - 1]))
+})
+
 test('failed-auth limiter trips after the window fills', () => {
   const limiter = new FailureLimiter(60_000, 3)
   assert.equal(limiter.limited('10.0.0.1'), false)
@@ -134,11 +143,11 @@ test('plain http to a non-loopback hub url is refused unless opted in', () => {
 test('non-loopback bind requires allowPlainHttp', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-hub-bind-'))
   const path = join(dir, 'hub.yaml')
-  writeFileSync(path, hashedHubYaml({
+  writeHashedHubYaml(path, {
     host: '0.0.0.0',
     port: 9,
     users: { alice: 'secret' },
-  }))
+  })
   const config = loadHubConfig(path)
   assert.throws(() => assertBindPolicy(config), /allowPlainHttp/)
   config.allowPlainHttp = true
@@ -150,11 +159,11 @@ test('config rejects a missing, plaintext, or malformed agentSecret', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-hub-secret-'))
   const path = join(dir, 'hub.yaml')
   const hashed = hashedHubYaml({ port: 9, users: { alice: 'secret' } })
-  writeFileSync(path, hashed.replace(/^agentSecret: .*\n/m, ''))
+  writeFileSync(path, hashed.replace(/^agentSecret: .*\n/m, ''), { mode: 0o600 })
   assert.throws(() => loadHubConfig(path), /agentSecret/)
-  writeFileSync(path, hashed.replace(/agentSecret: .*/, 'agentSecret: "test-agent-secret-1"'))
+  writeFileSync(path, hashed.replace(/agentSecret: .*/, 'agentSecret: "test-agent-secret-1"'), { mode: 0o600 })
   assert.throws(() => loadHubConfig(path), /bcrypt/)
-  writeFileSync(path, hashed.replace(/agentSecret: .*/, 'agentSecret: "short"'))
+  writeFileSync(path, hashed.replace(/agentSecret: .*/, 'agentSecret: "short"'), { mode: 0o600 })
   assert.throws(() => loadHubConfig(path), /bcrypt/)
   rmSync(dir, { recursive: true, force: true })
 })
@@ -162,7 +171,7 @@ test('config rejects a missing, plaintext, or malformed agentSecret', () => {
 test('config rejects a plaintext user password', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-hub-pw-'))
   const path = join(dir, 'hub.yaml')
-  writeFileSync(path, hashedHubYaml({ port: 9, users: { alice: 'secret' } }).replace(/alice: .*/, 'alice: "secret"'))
+  writeFileSync(path, hashedHubYaml({ port: 9, users: { alice: 'secret' } }).replace(/alice: .*/, 'alice: "secret"'), { mode: 0o600 })
   assert.throws(() => loadHubConfig(path), /bcrypt/)
   rmSync(dir, { recursive: true, force: true })
 })
@@ -178,10 +187,30 @@ test('renderHubConfig writes bcrypt hashes, not plaintext', () => {
   assert.doesNotMatch(yaml, new RegExp(TEST_AGENT_SECRET))
   const dir = mkdtempSync(join(tmpdir(), 'dsh-hub-render-'))
   const path = join(dir, 'hub.yaml')
-  writeFileSync(path, yaml)
+  writeFileSync(path, yaml, { mode: 0o600 })
   const config = loadHubConfig(path)
   assert.equal(verifySecret('alice-secret', config.users[0]?.passwordHash ?? ''), true)
   assert.equal(verifySecret(TEST_AGENT_SECRET, config.agentSecretHash), true)
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('username and sessionTtlSeconds are validated', () => {
+  assert.throws(() => assertUsername('alice: admin'), /username/)
+  assert.throws(() => assertUsername('alice\nbob'), /username/)
+  assert.throws(() => assertUsername(''), /username/)
+  assertUsername('alice')
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-hub-ttl-'))
+  const path = join(dir, 'hub.yaml')
+  const hashed = hashedHubYaml({ port: 9, users: { alice: 'secret' } })
+  writeFileSync(path, `${hashed}sessionTtlSeconds: never\n`, { mode: 0o600 })
+  assert.throws(() => loadHubConfig(path), /sessionTtlSeconds/)
+  writeFileSync(path, `${hashed}sessionTtlSeconds: 0\n`, { mode: 0o600 })
+  assert.throws(() => loadHubConfig(path), /sessionTtlSeconds/)
+  writeFileSync(path, `${hashed}trustedProxies:\n  - not-an-ip\n`, { mode: 0o600 })
+  assert.throws(() => loadHubConfig(path), /trustedProxies/)
+  writeFileSync(path, hashed, { mode: 0o600 })
+  chmodSync(path, 0o644)
+  assert.throws(() => loadHubConfig(path), /readable by others/)
   rmSync(dir, { recursive: true, force: true })
 })
 
@@ -205,10 +234,12 @@ test('rate-limit key ignores X-Forwarded-For unless the peer is a trusted proxy'
 
   const behindProxy = fakeReq('127.0.0.1', {
     'x-forwarded-for': '198.51.100.7, 203.0.113.9',
-    'x-forwarded-proto': 'https',
+    'x-forwarded-proto': 'http, https',
   })
   assert.equal(clientKey(behindProxy, ['127.0.0.1']), '203.0.113.9')
   assert.equal(isForwardedHttps(behindProxy, ['127.0.0.1']), true)
+  const spoofedProto = fakeReq('127.0.0.1', { 'x-forwarded-proto': 'https, http' })
+  assert.equal(isForwardedHttps(spoofedProto, ['127.0.0.1']), false)
 
   const mapped = fakeReq('::ffff:127.0.0.1', { 'x-forwarded-for': '203.0.113.10' })
   assert.equal(clientKey(mapped, ['127.0.0.1']), '203.0.113.10')
@@ -251,17 +282,30 @@ test('hub lang cookie is English unless exactly zh, and next stays on this origi
   assert.equal(safeNextPath('https://evil.example'), '/login')
   assert.equal(safeNextPath('//evil.example'), '/login')
   assert.equal(safeNextPath('/\\evil'), '/login')
+  assert.equal(safeNextPath('/login\r\nSet-Cookie: x'), '/login')
+  assert.equal(safeNextPath('/ok\n'), '/login')
 })
 
-test('headersForBrowser drops Set-Cookie', () => {
+test('headersForBrowser drops Set-Cookie and CORS, and sets frame denial', () => {
   const out = headersForBrowser([
     { name: 'content-type', value: 'text/plain' },
     { name: 'Set-Cookie', value: 'dsh_hub_session=stolen' },
     { name: 'set-cookie2', value: 'other=1' },
+    { name: 'access-control-allow-origin', value: 'https://evil.example' },
+    { name: 'access-control-allow-credentials', value: 'true' },
+    { name: 'clear-site-data', value: '"cookies"' },
+    { name: 'refresh', value: '0;url=https://evil.example' },
+    { name: 'x-frame-options', value: 'ALLOWALL' },
   ])
   assert.equal(out['content-type'], 'text/plain')
   assert.equal(out['set-cookie'], undefined)
   assert.equal(out['set-cookie2'], undefined)
+  assert.equal(out['access-control-allow-origin'], undefined)
+  assert.equal(out['access-control-allow-credentials'], undefined)
+  assert.equal(out['clear-site-data'], undefined)
+  assert.equal(out['refresh'], undefined)
+  assert.equal(out['x-frame-options'], 'DENY')
+  assert.equal(out['x-content-type-options'], 'nosniff')
 })
 
 test('ensurePrivateDirectory creates mode 0700 and tightens a too-open dir', () => {
@@ -273,6 +317,20 @@ test('ensurePrivateDirectory creates mode 0700 and tightens a too-open dir', () 
   chmodSync(nested, 0o755)
   ensurePrivateDirectory(nested)
   assert.equal(statSync(nested).mode & 0o777, 0o700)
+  rmSync(root, { recursive: true, force: true })
+})
+
+test('password file must be a mode-0600 regular file', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-hub-pwfile-'))
+  const file = join(root, 'secret')
+  writeFileSync(file, 'secret', { mode: 0o600 })
+  assert.equal(readPasswordFile(file), 'secret')
+  chmodSync(file, 0o660)
+  assert.throws(() => readPasswordFile(file), /group or others/)
+  chmodSync(file, 0o600)
+  const link = join(root, 'link')
+  symlinkSync(file, link)
+  assert.throws(() => readPasswordFile(link), /symlink/)
   rmSync(root, { recursive: true, force: true })
 })
 

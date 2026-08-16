@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from 'node:fs'
+import { lstatSync, readFileSync } from 'node:fs'
 import { stdin as stdinStream, stdout as stdoutStream } from 'node:process'
 
 const PASSWORD_ENV = 'DSH_HUB_PASSWORD'
@@ -16,7 +16,7 @@ export async function resolveAgentSecret(secretFile?: string): Promise<string> {
 
 /**
  * Plaintext for `dsh-hub hash`. Does not read `DSH_HUB_PASSWORD` or `DSH_HUB_AGENT_SECRET`.
- * @param passwordFile - optional mode-`0600` file of the value to hash.
+ * @param passwordFile - optional regular file, mode `0600`, of the value to hash.
  * @returns the plaintext to hash.
  */
 export async function resolveHashPlaintext(passwordFile?: string): Promise<string> {
@@ -24,10 +24,18 @@ export async function resolveHashPlaintext(passwordFile?: string): Promise<strin
   return askSecret('plaintext to hash', 'pass --password-file (hash does not read DSH_HUB_PASSWORD)')
 }
 
+/**
+ * Read a secret from a regular file that is not a symlink and has mode `0600`.
+ * @param path - file to read.
+ * @returns the file text with a single trailing newline stripped.
+ */
 export function readPasswordFile(path: string): string {
-  const mode = statSync(path).mode & 0o777
-  if ((mode & 0o044) !== 0) {
-    throw new Error(`${path}: mode ${mode.toString(8)} is readable by others (use 0600)`)
+  const info = lstatSync(path)
+  if (info.isSymbolicLink()) throw new Error(`${path}: password file must not be a symlink`)
+  if (!info.isFile()) throw new Error(`${path}: password file must be a regular file`)
+  const mode = info.mode & 0o777
+  if ((mode & 0o077) !== 0) {
+    throw new Error(`${path}: mode ${mode.toString(8)} is accessible by group or others (use 0600)`)
   }
   const text = readFileSync(path, 'utf8').replace(/\r?\n$/, '')
   if (text.length === 0) throw new Error(`${path}: empty password file`)

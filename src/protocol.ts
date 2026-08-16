@@ -68,7 +68,8 @@ export const HANDSHAKE_TIMEOUT_MS = 20_000
 export const BACKOFF_MIN_MS = 1_000
 export const BACKOFF_MAX_MS = 300_000
 export const HEALTHY_RESET_MS = 60_000
-export const MAX_FRAME_BYTES = 200 * 1024 * 1024
+/** Largest tunnel WebSocket payload. HTTP bodies are already split at {@link DATA_CHUNK}. */
+export const MAX_FRAME_BYTES = 8 * 1024 * 1024
 
 export function encodeFrame(type: number, streamId: number, payload: Buffer = Buffer.alloc(0)): Buffer {
   const buf = Buffer.allocUnsafe(5 + payload.length)

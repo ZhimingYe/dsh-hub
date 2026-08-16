@@ -65,5 +65,9 @@ export function safeNextPath(raw: string | null): string {
   if (!raw.startsWith('/') || raw.startsWith('//') || raw.includes('\\') || raw.includes('\0')) {
     return '/login'
   }
+  for (let index = 0; index < raw.length; index += 1) {
+    const code = raw.charCodeAt(index)
+    if (code < 32 || code === 127) return '/login'
+  }
   return raw
 }

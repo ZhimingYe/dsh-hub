@@ -1,5 +1,5 @@
 import { createServer } from 'node:http'
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, test } from 'node:test'
@@ -7,16 +7,16 @@ import assert from 'node:assert/strict'
 import { HubServer } from '../src/server.ts'
 import { HubAgent } from '../src/agent.ts'
 import { loadHubConfig } from '../src/config.ts'
-import { hashedHubYaml, TEST_AGENT_SECRET } from './hashed-yaml.ts'
+import { writeHashedHubYaml, TEST_AGENT_SECRET } from './hashed-yaml.ts'
 
 const dir = mkdtempSync(join(tmpdir(), 'dsh-hub-re-'))
 const socketPath = join(dir, 'dsh.sock')
 const configPath = join(dir, 'hub.yaml')
-writeFileSync(configPath, hashedHubYaml({
+writeHashedHubYaml(configPath, {
   host: '127.0.0.1',
   port: 0,
   users: { alice: 'alice-secret' },
-}))
+})
 
 const dsh = createServer((_req, res) => {
   res.writeHead(200)

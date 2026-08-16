@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -8,17 +8,17 @@ import { WebSocket } from 'ws'
 import { HubServer } from '../src/server.ts'
 import { HubAgent } from '../src/agent.ts'
 import { loadHubConfig } from '../src/config.ts'
-import { hashedHubYaml, TEST_AGENT_SECRET } from './hashed-yaml.ts'
+import { writeHashedHubYaml, TEST_AGENT_SECRET } from './hashed-yaml.ts'
 
 const SECRET = TEST_AGENT_SECRET
 const dir = mkdtempSync(join(tmpdir(), 'dsh-hub-sec-'))
 const socketPath = join(dir, 'dsh.sock')
 const configPath = join(dir, 'hub.yaml')
-writeFileSync(configPath, hashedHubYaml({
+writeHashedHubYaml(configPath, {
   host: '127.0.0.1',
   port: 0,
   users: { alice: 'alice-secret' },
-}))
+})
 
 const hub = new HubServer({ config: loadHubConfig(configPath) })
 let origin = ''
@@ -67,6 +67,34 @@ test('agent with secret and password registers', async () => {
   await agent.start()
   assert.equal(hub.agentOnline('alice'), true)
   await agent.stop()
+})
+
+test('a takeover agent keeps its reconnect token when the replaced agent drops', async () => {
+  const first = new HubAgent({
+    hubUrl: `ws://127.0.0.1:${String(port)}/agent`,
+    username: 'alice',
+    password: 'alice-secret',
+    agentSecret: SECRET,
+    socketPath,
+  })
+  await first.start()
+  assert.equal(hub.agentOnline('alice'), true)
+  const second = new HubAgent({
+    hubUrl: `ws://127.0.0.1:${String(port)}/agent`,
+    username: 'alice',
+    password: 'alice-secret',
+    agentSecret: SECRET,
+    socketPath,
+  })
+  await second.start()
+  // Registering the second agent terminated the first; the first's drop must
+  // not delete the second agent's reconnect token.
+  const firstWs = first['ws']
+  assert.ok(firstWs)
+  await new Promise<void>(resolve => firstWs.once('close', resolve))
+  assert.equal(hub.agentOnline('alice'), true)
+  await second.stop()
+  await first.stop()
 })
 
 test('login with an unknown username is 401', async () => {
@@ -222,6 +250,38 @@ test('a Host port that differs from the Origin port is rejected', async () => {
     `Content-Length: ${String(body.length)}`,
     '',
     body,
+  ])
+  assert.equal(status, 403)
+})
+
+test('login HTML carries clickjacking and nosniff headers', async () => {
+  const response = await fetch(`${origin}/login`)
+  assert.equal(response.status, 200)
+  assert.equal(response.headers.get('x-frame-options'), 'DENY')
+  assert.match(response.headers.get('content-security-policy') ?? '', /frame-ancestors 'none'/)
+  assert.equal(response.headers.get('x-content-type-options'), 'nosniff')
+  assert.equal(response.headers.get('cache-control'), 'no-store')
+})
+
+test('cross-site browser websocket upgrade is 403', async () => {
+  const login = await fetch(`${origin}/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', origin },
+    body: 'username=alice&password=alice-secret',
+    redirect: 'manual',
+  })
+  const setCookie = login.headers.get('set-cookie') ?? ''
+  const match = /dsh_hub_session=([^;]+)/.exec(setCookie)
+  assert.ok(match)
+  const status = await rawRequestStatus([
+    'GET /api/events.mux HTTP/1.1',
+    `Host: 127.0.0.1:${String(port)}`,
+    'Upgrade: websocket',
+    'Connection: Upgrade',
+    'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
+    'Sec-WebSocket-Version: 13',
+    'Origin: https://evil.example',
+    `Cookie: dsh_hub_session=${match[1]}`,
   ])
   assert.equal(status, 403)
 })

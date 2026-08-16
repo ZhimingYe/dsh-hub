@@ -33,7 +33,47 @@ const STRIP_TO_BROWSER = new Set([
   ...HOP_BY_HOP,
   'set-cookie',
   'set-cookie2',
+  'access-control-allow-origin',
+  'access-control-allow-credentials',
+  'access-control-allow-headers',
+  'access-control-allow-methods',
+  'access-control-allow-private-network',
+  'access-control-expose-headers',
+  'access-control-max-age',
+  'access-control-request-headers',
+  'access-control-request-method',
+  'clear-site-data',
+  'refresh',
 ])
+
+/**
+ * Headers on Hub-owned HTML (login, offline).
+ * Inline CSS and the offline reload script are the only script/style sources.
+ */
+export const HUB_HTML_SECURITY_HEADERS: Record<string, string> = {
+  'cache-control': 'no-store',
+  'content-security-policy': "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+  'referrer-policy': 'no-referrer',
+  'x-content-type-options': 'nosniff',
+  'x-frame-options': 'DENY',
+}
+
+/**
+ * Headers on Hub-owned JSON and plain-text replies that are not tunneled dsh.
+ */
+export const HUB_API_SECURITY_HEADERS: Record<string, string> = {
+  'cache-control': 'no-store',
+  'content-security-policy': "default-src 'none'; frame-ancestors 'none'",
+  'referrer-policy': 'no-referrer',
+  'x-content-type-options': 'nosniff',
+  'x-frame-options': 'DENY',
+}
+
+const TUNNEL_SECURITY_HEADERS: Record<string, string> = {
+  'x-content-type-options': 'nosniff',
+  'x-frame-options': 'DENY',
+  'referrer-policy': 'no-referrer',
+}
 
 export function incomingToPairs(headers: IncomingHttpHeaders): HeaderPair[] {
   const pairs: HeaderPair[] = []
@@ -75,11 +115,15 @@ export function headersForDsh(pairs: HeaderPair[]): Record<string, string> {
 }
 
 /**
- * Forward dsh response headers to the browser. Drops hop-by-hop headers and
- * `Set-Cookie` so a tunneled plugin cannot overwrite `dsh_hub_session`.
+ * Forward dsh response headers to the browser. Drops hop-by-hop headers,
+ * `Set-Cookie` so a tunneled plugin cannot overwrite `dsh_hub_session`, and
+ * CORS / `Clear-Site-Data` / `Refresh` so a plugin cannot widen the Hub origin
+ * or evict the session cookie. Always sets frame-denial and `nosniff`.
  */
 export function headersForBrowser(pairs: HeaderPair[]): Record<string, string | string[]> {
-  return pairsToRecord(filterPairs(pairs, STRIP_TO_BROWSER))
+  const out = pairsToRecord(filterPairs(pairs, STRIP_TO_BROWSER))
+  for (const [name, value] of Object.entries(TUNNEL_SECURITY_HEADERS)) out[name] = value
+  return out
 }
 
 export function wsHeadersForDsh(pairs: HeaderPair[]): Record<string, string> {

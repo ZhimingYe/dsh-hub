@@ -38,7 +38,7 @@ import {
   sessionCookie,
   sessionIdFromRequest,
 } from './auth.js'
-import { headersForBrowser, incomingToPairs } from './headers.js'
+import { HUB_API_SECURITY_HEADERS, HUB_HTML_SECURITY_HEADERS, headersForBrowser, incomingToPairs } from './headers.js'
 import { FAVICON_SVG, loginPage, offlinePage } from './pages.js'
 import { hubLangFromRequest, langCookie, safeNextPath } from './locale.js'
 
@@ -57,6 +57,7 @@ type Stream = HttpStream | WsStream
 interface AgentLink {
   agentId: string
   user: string
+  token: string
   ws: WebSocket
   nextStreamId: number
   streams: Map<number, Stream>
@@ -142,19 +143,25 @@ export class HubServer {
     const url = new URL(req.url ?? '/', 'http://hub.local')
     try {
       if (req.method === 'GET' && url.pathname === '/favicon.svg') {
-        res.writeHead(200, { 'content-type': 'image/svg+xml; charset=utf-8', 'cache-control': 'public, max-age=86400' })
+        res.writeHead(200, {
+          'content-type': 'image/svg+xml; charset=utf-8',
+          'cache-control': 'public, max-age=86400',
+          'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'",
+          'x-content-type-options': 'nosniff',
+        })
         res.end(FAVICON_SVG)
         return
       }
       if (req.method === 'GET' && url.pathname === '/lang') {
         const set = url.searchParams.get('set')
         if (set !== 'en' && set !== 'zh') {
-          res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' })
+          res.writeHead(400, { ...HUB_API_SECURITY_HEADERS, 'content-type': 'text/plain; charset=utf-8' })
           res.end('invalid lang')
           return
         }
         const next = safeNextPath(url.searchParams.get('next'))
         res.writeHead(302, {
+          ...HUB_API_SECURITY_HEADERS,
           location: next,
           'set-cookie': langCookie(set, isForwardedHttps(req, this.config.trustedProxies)),
         })
@@ -180,6 +187,7 @@ export class HubServer {
         }
         this.sessions.revoke(sessionIdFromRequest(req))
         res.writeHead(302, {
+          ...HUB_API_SECURITY_HEADERS,
           location: '/login',
           'set-cookie': clearSessionCookie(isForwardedHttps(req, this.config.trustedProxies)),
         })
@@ -201,11 +209,11 @@ export class HubServer {
       }
       if (username === undefined) {
         if (url.pathname.startsWith('/api') || req.headers.upgrade !== undefined) {
-          res.writeHead(401, { 'content-type': 'text/plain; charset=utf-8' })
+          res.writeHead(401, { ...HUB_API_SECURITY_HEADERS, 'content-type': 'text/plain; charset=utf-8' })
           res.end('unauthorized')
           return
         }
-        res.writeHead(302, { location: '/login' })
+        res.writeHead(302, { ...HUB_API_SECURITY_HEADERS, location: '/login' })
         res.end()
         return
       }
@@ -217,7 +225,7 @@ export class HubServer {
     } catch (error) {
       console.error(error instanceof Error ? error : new Error(String(error)))
       if (!res.headersSent) {
-        res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' })
+        res.writeHead(500, { ...HUB_API_SECURITY_HEADERS, 'content-type': 'text/plain; charset=utf-8' })
         res.end('internal error')
       } else {
         res.destroy()
@@ -232,17 +240,21 @@ export class HubServer {
     const password = params.get('password') ?? ''
     const key = clientKey(req, this.config.trustedProxies)
     if (this.loginFailures.limited(key)) {
+      console.warn(`dsh-hub: login rate-limited from ${key}`)
       this.html(res, 429, loginPage(hubLangFromRequest(req), 'tooMany'))
       return
     }
     const user = findUser(this.config, username)
     if (!this.passwordMatches(user, password)) {
       this.loginFailures.add(key)
+      console.warn(`dsh-hub: login failed from ${key}`)
       this.html(res, 401, loginPage(hubLangFromRequest(req), 'badCredentials'))
       return
     }
+    console.log(`dsh-hub: login ok for ${user.username}`)
     const id = this.sessions.create(user.username)
     res.writeHead(302, {
+      ...HUB_API_SECURITY_HEADERS,
       location: '/',
       'set-cookie': sessionCookie(
         id,
@@ -279,6 +291,11 @@ export class HubServer {
       const username = this.userFromRequest(req)
       if (username === undefined) {
         socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')
+        socket.destroy()
+        return
+      }
+      if (!isSameOriginRequest(req)) {
+        socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n')
         socket.destroy()
         return
       }
@@ -362,6 +379,7 @@ export class HubServer {
       && passwordsEqual(payload.token, storedToken)
     if (user === undefined || (!passwordOk && !tokenOk)) {
       this.registerFailures.add(key)
+      console.warn(`dsh-hub: agent register rejected for ${sanitizeLogUsername(payload.username)}`)
       sendJson(ws, FrameType.RegisterErr, 0, { error: 'unauthorized' })
       ws.close(4006, 'unauthorized')
       return false
@@ -376,6 +394,7 @@ export class HubServer {
     const link: AgentLink = {
       agentId: user.username,
       user: user.username,
+      token,
       ws,
       nextStreamId: 1,
       streams: new Map(),
@@ -392,6 +411,10 @@ export class HubServer {
       if (link.ws !== ws) continue
       this.failStreams(link, 'agent disconnected')
       this.agentsByUser.delete(user)
+      // Only the replaced agent's token is dropped; a newer agent that took
+      // over this user keeps its token, or the takeover would force a
+      // password re-register on the first reconnect.
+      if (this.agentTokens.get(user) === link.token) this.agentTokens.delete(user)
     }
   }
 
@@ -399,7 +422,7 @@ export class HubServer {
     for (const stream of link.streams.values()) {
       if (stream.kind === 'http') {
         if (!stream.res.headersSent) {
-          stream.res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' })
+          stream.res.writeHead(502, { ...HUB_API_SECURITY_HEADERS, 'content-type': 'text/plain; charset=utf-8' })
           stream.res.end(reason)
         } else {
           stream.res.destroy()
@@ -516,6 +539,9 @@ export class HubServer {
   }
 
   private sweepHeartbeats(): void {
+    this.sessions.sweepExpired()
+    this.loginFailures.sweep()
+    this.registerFailures.sweep()
     const now = Date.now()
     for (const [user, link] of this.agentsByUser) {
       if (now - link.lastBeat > HEARTBEAT_TIMEOUT_MS) {
@@ -530,12 +556,12 @@ export class HubServer {
   }
 
   private html(res: ServerResponse, status: number, body: string): void {
-    res.writeHead(status, { 'content-type': 'text/html; charset=utf-8' })
+    res.writeHead(status, { ...HUB_HTML_SECURITY_HEADERS, 'content-type': 'text/html; charset=utf-8' })
     res.end(body)
   }
 
   private json(res: ServerResponse, status: number, body: unknown): void {
-    res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
+    res.writeHead(status, { ...HUB_API_SECURITY_HEADERS, 'content-type': 'application/json; charset=utf-8' })
     res.end(JSON.stringify(body))
   }
 
@@ -604,6 +630,11 @@ function isSameOriginRequest(req: IncomingMessage): boolean {
 
 function randomToken(): string {
   return randomBytes(32).toString('base64url')
+}
+
+/** Control characters in a register frame's username must not reach the log. */
+function sanitizeLogUsername(username: string): string {
+  return username.replace(/[\x00-\x1f\x7f]/g, '?')
 }
 
 function enableKeepAlive(ws: WebSocket): void {

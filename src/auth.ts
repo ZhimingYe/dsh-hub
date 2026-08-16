@@ -4,6 +4,11 @@ import type { IncomingMessage } from 'node:http'
 export const SESSION_COOKIE = 'dsh_hub_session'
 export const AUTH_FAILURE_WINDOW_MS = 15 * 60_000
 export const AUTH_FAILURE_MAX = 5
+/**
+ * Cap of live sessions per username so one account cannot fill process memory.
+ * Creating another session evicts the oldest for that user.
+ */
+export const MAX_SESSIONS_PER_USER = 32
 
 export interface SessionRecord {
   username: string
@@ -16,6 +21,8 @@ export class SessionStore {
   constructor(private readonly ttlMs: number) {}
 
   create(username: string): string {
+    this.sweepExpired()
+    this.evictOldestForUser(username)
     const id = randomBytes(32).toString('base64url')
     this.sessions.set(id, { username, expiresAt: Date.now() + this.ttlMs })
     return id
@@ -34,6 +41,25 @@ export class SessionStore {
 
   revoke(id: string | undefined): void {
     if (id !== undefined) this.sessions.delete(id)
+  }
+
+  /** Drop every expired session. Called from the Hub heartbeat. */
+  sweepExpired(): void {
+    const now = Date.now()
+    for (const [id, record] of this.sessions) {
+      if (record.expiresAt <= now) this.sessions.delete(id)
+    }
+  }
+
+  private evictOldestForUser(username: string): void {
+    const owned: Array<{ id: string; expiresAt: number }> = []
+    for (const [id, record] of this.sessions) {
+      if (record.username === username) owned.push({ id, expiresAt: record.expiresAt })
+    }
+    if (owned.length < MAX_SESSIONS_PER_USER) return
+    owned.sort((left, right) => left.expiresAt - right.expiresAt)
+    const overflow = owned.length - MAX_SESSIONS_PER_USER + 1
+    for (const item of owned.slice(0, overflow)) this.sessions.delete(item.id)
   }
 }
 
@@ -54,6 +80,11 @@ export class FailureLimiter {
     const list = this.hits.get(key) ?? []
     list.push(Date.now())
     this.hits.set(key, list)
+  }
+
+  /** Drop expired hits for every key so unused IPs do not accumulate. */
+  sweep(): void {
+    for (const key of [...this.hits.keys()]) this.prune(key)
   }
 
   private prune(key: string): void {
@@ -100,8 +131,8 @@ export function isForwardedHttps(req: IncomingMessage, trustedProxies: readonly 
   if (!isTrustedProxy(req, trustedProxies)) return false
   const proto = req.headers['x-forwarded-proto']
   const value = Array.isArray(proto) ? proto[0] : proto
-  const first = value?.split(',')[0]?.trim().toLowerCase()
-  return first === 'https'
+  const hops = value?.split(',').map(part => part.trim().toLowerCase()).filter(part => part.length > 0) ?? []
+  return hops.at(-1) === 'https'
 }
 
 export function bearerToken(req: IncomingMessage): string | undefined {
@@ -156,6 +187,8 @@ export function sessionCookie(id: string, maxAgeSeconds: number, secure: boolean
     'SameSite=Lax',
     `Max-Age=${String(maxAgeSeconds)}`,
   ]
+  // __Host- requires Secure; loopback HTTP cannot use it. Secure is enough
+  // to refuse a Domain= cookie toss when the reverse proxy is HTTPS.
   if (secure) parts.push('Secure')
   return parts.join('; ')
 }
