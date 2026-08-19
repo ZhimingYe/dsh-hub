@@ -1,5 +1,6 @@
 /**
- * ctx.webServer over a 0600 Unix socket.
+ * ctx.webServer over a 0600 Unix socket. HTTP responses are gzip-compressed
+ * when the client sends Accept-Encoding: gzip; WebSocket upgrades are not.
  */
 import { createServer } from 'node:http'
 import { chmodSync, existsSync, unlinkSync } from 'node:fs'
@@ -7,6 +8,7 @@ import { dirname } from 'node:path'
 import { Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { ensurePrivateDirectory } from './private-dir.js'
+import { wrapGzipResponse } from './gzip.js'
 
 /**
  * @typedef {'exact' | 'prefix'} WebRouteKind
@@ -90,19 +92,20 @@ export class WebServer extends Service {
     if (existsSync(socketPath)) unlinkSync(socketPath)
 
     const handle = async (req, res) => {
+      const out = wrapGzipResponse(req, res)
       const rawPath = new URL(req.url ?? '/', 'http://x').pathname
       const route = this.match(rawPath)
       if (route !== undefined) {
-        await route.handler(req, res)
+        await route.handler(req, out)
         return
       }
       const fallback = this.fallback
       if (fallback === undefined) {
-        res.writeHead(404)
-        res.end()
+        out.writeHead(404)
+        out.end()
         return
       }
-      await fallback(req, res)
+      await fallback(req, out)
     }
 
     this.server = createServer((req, res) => {

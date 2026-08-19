@@ -6,10 +6,19 @@ import { join } from 'node:path'
 import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { WebSocket, WebSocketServer } from 'ws'
+import { gunzipSync } from 'node:zlib'
+import http from 'node:http'
 import { HubServer } from '../src/server.ts'
 import { HubAgent } from '../src/agent.ts'
 import { loadHubConfig } from '../src/config.ts'
 import { writeHashedHubYaml, TEST_AGENT_SECRET } from './hashed-yaml.ts'
+import { wrapGzipResponse } from '../webserver-unix/src/gzip.js'
+
+const HISTORY_LIKE = JSON.stringify({ events: Array.from({ length: 40 }, (_, seq) => ({
+  type: 'assistant/message',
+  seq,
+  text: 'history-line '.repeat(8),
+})) })
 
 const dir = mkdtempSync(join(tmpdir(), 'dsh-hub-'))
 const socketPath = join(dir, 'dsh.sock')
@@ -22,6 +31,15 @@ writeHashedHubYaml(configPath, {
 })
 
 const dsh = createServer((req, res) => {
+  if (req.url === '/history-like') {
+    const out = wrapGzipResponse(req, res)
+    out.writeHead(200, {
+      'content-type': 'application/json',
+      'content-length': String(Buffer.byteLength(HISTORY_LIKE)),
+    })
+    out.end(HISTORY_LIKE)
+    return
+  }
   if (req.url === '/hello') {
     res.writeHead(200, {
       'content-type': 'text/plain; charset=utf-8',
@@ -109,6 +127,18 @@ test('wrong password is rejected', async () => {
   })
   assert.equal(response.status, 401)
   assert.match(await response.text(), /Incorrect username or password/)
+})
+
+test('tunneled gzip JSON stays compressed through Hub to the browser', async () => {
+  const session = cookie.length > 0 ? cookie : await login('alice', 'alice-secret')
+  const raw = await rawTunnelGet('/history-like', {
+    cookie: session,
+    'accept-encoding': 'gzip',
+  })
+  assert.equal(raw.status, 200)
+  assert.equal(raw.headers['content-encoding'], 'gzip')
+  assert.equal(gunzipSync(raw.body).toString('utf8'), HISTORY_LIKE)
+  assert.ok(raw.body.length < Buffer.byteLength(HISTORY_LIKE))
 })
 
 test('alice can log in and reach DSH through the tunnel', async () => {
@@ -222,6 +252,21 @@ test('DSH is not listening on TCP', async () => {
   assert.equal(typeof address, 'string')
   assert.equal(address, socketPath)
 })
+
+function rawTunnelGet(
+  path: string,
+  headers: http.OutgoingHttpHeaders,
+): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: Buffer }> {
+  return new Promise((resolve, reject) => {
+    http.get(`http://127.0.0.1:${String(port)}${path}`, { headers }, (res) => {
+      const chunks: Buffer[] = []
+      res.on('data', chunk => { chunks.push(chunk as Buffer) })
+      res.on('end', () => {
+        resolve({ status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks) })
+      })
+    }).on('error', reject)
+  })
+}
 
 async function login(username: string, password: string): Promise<string> {
   const response = await fetch(`${origin}/login`, {

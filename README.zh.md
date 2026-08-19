@@ -119,7 +119,7 @@ dsh-hub connect https://hub.example.com --user alice
 
 密码和 Agent 密钥都在提示符输入。密钥是首次 `serve` 打印的 `DSH_HUB_AGENT_SECRET`，不是 `hub.yaml` 里的哈希。进程保持运行。终端出现 `connecting` 后，回到浏览器用同一账号登录，应进入工作站。
 
-dsh 的 HTTP 走 Unix 套接字：`$XDG_RUNTIME_DIR/dsh-hub-<uid>/workstation.sock`；未设置 `XDG_RUNTIME_DIR` 时为 `/tmp/dsh-hub-<uid>/workstation.sock`。该目录必须属于当前 uid 且权限 `0700`（不能是符号链接、不能被他人占用），否则 `connect` 拒绝启动。共享登录节点应设置 `XDG_RUNTIME_DIR`。
+dsh 的 HTTP 走 Unix 套接字：`$XDG_RUNTIME_DIR/dsh-hub-<uid>/workstation.sock`；未设置 `XDG_RUNTIME_DIR` 时为 `/tmp/dsh-hub-<uid>/workstation.sock`。该目录必须属于当前 uid 且权限 `0700`（不能是符号链接、不能被他人占用），否则 `connect` 拒绝启动。共享登录节点应设置 `XDG_RUNTIME_DIR`。浏览器带上 `Accept-Encoding: gzip` 时，`webserver-unix` 会压缩 HTTP 响应（JSON、HTML、JavaScript 及其他文本类型）。隧道原样转发这些字节，因此 HPC 到 Hub 的一跳也会变小。WebSocket 升级不压缩。
 
 断线后自动重连。
 

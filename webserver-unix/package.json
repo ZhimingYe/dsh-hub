@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Drop-in ctx.webServer that listens on a user-private Unix socket instead of TCP. Overlay this over @deepseek-ai/dsh-host-webserver; do not edit the upstream package.",
+  "description": "Drop-in ctx.webServer that listens on a user-private Unix socket instead of TCP and gzip-compresses HTTP responses the browser accepts. Overlay this over @deepseek-ai/dsh-host-webserver; do not edit the upstream package.",
   "main": "src/index.js",
   "exports": {
     ".": "./src/index.js",
@@ -11,6 +11,7 @@
   },
   "files": [
     "src/index.js",
+    "src/gzip.js",
     "src/private-dir.js"
   ],
   "license": "MIT",

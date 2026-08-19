@@ -119,7 +119,7 @@ dsh-hub connect https://hub.example.com --user alice
 
 Enter the password and agent secret at the prompts. The secret is the `DSH_HUB_AGENT_SECRET` printed on first `serve`, not the hash in `hub.yaml`. The process stays running. After the terminal shows `connecting`, sign in in the browser with the same account; you should reach the workstation.
 
-dsh HTTP uses a Unix socket: `$XDG_RUNTIME_DIR/dsh-hub-<uid>/workstation.sock`; if `XDG_RUNTIME_DIR` is unset, `/tmp/dsh-hub-<uid>/workstation.sock`. That directory must be owned by this uid and mode `0700` (not a symlink, not owned by someone else), or `connect` refuses to start. Shared login nodes should set `XDG_RUNTIME_DIR`.
+dsh HTTP uses a Unix socket: `$XDG_RUNTIME_DIR/dsh-hub-<uid>/workstation.sock`; if `XDG_RUNTIME_DIR` is unset, `/tmp/dsh-hub-<uid>/workstation.sock`. That directory must be owned by this uid and mode `0700` (not a symlink, not owned by someone else), or `connect` refuses to start. Shared login nodes should set `XDG_RUNTIME_DIR`. `webserver-unix` gzip-compresses HTTP responses when the browser sends `Accept-Encoding: gzip` (JSON, HTML, JavaScript, and other text types). The tunnel forwards those bytes, so the HPC-to-Hub hop shrinks too. WebSocket upgrades are not compressed.
 
 Reconnect is automatic after a drop.
 
